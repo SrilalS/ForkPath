@@ -46,8 +46,9 @@ export async function probe(cfg: ResolvedBuiltin): Promise<ProbeResult> {
     system: 'You reply with JSON only.',
     tools: [],
     maxToolCalls: 0,
-    // Generous: thinking models spend part of the budget on hidden reasoning.
-    maxOutputTokens: 2000,
+    // The configured budget, not a small fixed one: reasoning models can spend thousands of tokens thinking
+    // even before a one-line answer, and a test that fails for that reason says nothing about real jobs.
+    maxOutputTokens: Math.max(2000, cfg.maxOutputTokens),
     timeoutMs: Math.min(cfg.timeoutMs, 180_000),
     signal: AbortSignal.timeout(Math.min(cfg.timeoutMs, 180_000) + 5_000),
   });

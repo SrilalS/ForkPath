@@ -57,8 +57,12 @@ export interface BuiltinView {
   maxToolCalls: number;
   maxRepairs: number;
   timeoutMs: number;
+  /** 'default' sends nothing: the model decides how much to think. */
+  reasoningEffort: ReasoningEffort;
   pricing: Pricing;
 }
+
+export type ReasoningEffort = 'default' | 'low' | 'medium' | 'high';
 
 export interface UsageEntry {
   at: string;

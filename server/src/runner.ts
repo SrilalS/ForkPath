@@ -11,6 +11,7 @@ import { monthSummary, recordUsage } from './usage.ts';
 import { claimForBuiltin, getJob, onQueueChange, releaseJob, setBuiltinStatus } from './jobs.ts';
 import { createProvider, LlmError, type ToolSpec, type Usage } from './llm/index.ts';
 import { extractJson } from './llm/json.ts';
+import { listModels } from './llm/probe.ts';
 import { searchForJob, showNode } from './search.ts';
 import { getTimeline } from './store.ts';
 
@@ -92,8 +93,59 @@ function budgetProblem(): string | null {
 function publishStatus() {
   const cfg = getConfig();
   const r = resolveBuiltin();
-  const problem = cfg.engine === 'builtin' ? (paused ?? builtinProblem(r) ?? budgetProblem()) : null;
+  const problem = cfg.engine === 'builtin' ? (paused ?? builtinProblem(r) ?? unreachable ?? budgetProblem()) : null;
   setBuiltinStatus({ ready: cfg.engine === 'builtin' && !problem, label: createProvider(r).label, problem });
+}
+
+/**
+ * Whether the configured server answers, so the status never says "running" while it is down. Set by
+ * checkReachable (GET /models: no tokens, no cost) and by a connection test of the saved settings. While
+ * set, jobs wait in the queue instead of failing one by one.
+ */
+let unreachable: string | null = null;
+let lastCheck = 0;
+let checking: Promise<void> | null = null;
+let pumpRef: (() => void) | null = null;
+const RECHECK_MS = 30_000;
+
+/** Records whether the server answered; a recovery starts the queued jobs. */
+export function noteReachability(problem: string | null) {
+  lastCheck = Date.now();
+  const recovered = unreachable !== null && problem === null;
+  if (problem === unreachable) return;
+  unreachable = problem;
+  publishStatus();
+  if (recovered) pumpRef?.();
+}
+
+/**
+ * Checks the saved built-in settings now (or reuses a check younger than `maxAgeMs`). Only failures that
+ * stop every job count: no connection, or the key rejected. Other answers (a server without /models)
+ * mean it is up.
+ */
+export function checkReachable(maxAgeMs = 0): Promise<void> {
+  const cfg = getConfig();
+  const r = resolveBuiltin();
+  if (cfg.engine !== 'builtin' || builtinProblem(r)) {
+    noteReachability(null);
+    return Promise.resolve();
+  }
+  if (checking) return checking;
+  if (Date.now() - lastCheck < maxAgeMs) return Promise.resolve();
+  checking = listModels(r)
+    .then(
+      () => noteReachability(null),
+      (err: Error) => {
+        const msg = err.message;
+        if (msg.startsWith('Cannot reach')) noteReachability(msg);
+        else if (/^HTTP 40[13]\b/.test(msg)) noteReachability(`The server rejected the API key (${msg.slice(0, 8)})`);
+        else noteReachability(null);
+      },
+    )
+    .finally(() => {
+      checking = null;
+    });
+  return checking;
 }
 
 const fmtUsage = (u: Usage) =>
@@ -229,6 +281,14 @@ function handleProviderError(err: unknown, job: Job, deps: RunnerDeps, log: (m: 
     publishStatus();
     return 'released';
   }
+  if (err.message.startsWith('Cannot reach')) {
+    // The server is down, not the job at fault: put it back and wait until the server answers again.
+    log(`server unreachable, job back in the queue: ${err.message}`);
+    const current = getJob(job.id);
+    if (current) releaseJob(current);
+    noteReachability(err.message);
+    return 'released';
+  }
   const hint = err.kind === 'truncated' ? ' Raise maxOutputTokens in Settings, or retry.' : '';
   log(`failed: ${err.message}`);
   deps.fail(job.id, `${err.message}.${hint}`);
@@ -243,7 +303,7 @@ function pump(deps: RunnerDeps) {
     if (!job || job.status !== 'claimed' || job.claimedBy !== 'builtin') controller.abort();
   }
   const cfg = getConfig();
-  if (cfg.engine !== 'builtin' || paused || builtinProblem() || budgetProblem()) return;
+  if (cfg.engine !== 'builtin' || paused || builtinProblem() || unreachable || budgetProblem()) return;
   while (running.size < cfg.builtin.concurrency) {
     const job = claimForBuiltin();
     if (!job) return;
@@ -270,12 +330,18 @@ export function startRunner(deps: RunnerDeps) {
       pump(deps);
     });
   });
+  pumpRef = () => pump(deps);
   onConfigChange((cfg) => {
     paused = null; // a config edit is the fix for whatever paused it
+    unreachable = null; // and may fix an unreachable server: check again right away
     if (cfg.engine !== 'builtin') for (const c of running.values()) c.abort();
     publishStatus();
     pump(deps);
+    void checkReachable();
   });
+  // Keeps the status honest while the built-in engine is active (a local server stopped, the network dropped).
+  setInterval(() => void checkReachable(RECHECK_MS - 1000), RECHECK_MS).unref();
   publishStatus();
   pump(deps);
+  void checkReachable();
 }

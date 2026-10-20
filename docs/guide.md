@@ -27,7 +27,7 @@ The same guide is built into the app: open **Guide** in the sidebar.
 | 🔍 Review | Another writer checks the event for contradictions, anachronisms, unearned outcomes, causality gaps and numbers out of scale. The verdict and flags show in the panel, problems as a badge on the card; **Fix with Regenerate** sends the fixes as guidance. Editing or regenerating the event clears its review |
 | ★ Most likely | Top bar toggle. Fades every node outside the most likely history: at each fork, the outcome the model rated highest |
 | ⑂ Turning points | Top bar. A date-ordered list of every fork (with each outcome's share) and every pivotal event; click one to jump to it |
-| ◷ Align by time | Top bar toggle. Columns follow each node's start date, so events in different branches line up. Remembered per timeline |
+| ◷ Align by time | On by default. Columns follow each node's start date, so events in different branches line up. Toggle it in the top bar for the compact tree; the choice is remembered per timeline |
 | 💾 Save branch, Export | **Save branch** in the side panel downloads the path to a node plus everything after it. **Export** in the top bar downloads the whole timeline |
 | 📂 Import | **Import** in the sidebar opens a saved file as a new timeline (fresh ids, so importing twice is safe) |
 | ⇤ Sidebar, ↔️ panel | The arrow next to the logo collapses the sidebar to an icon rail. Drag the side panel's left edge to resize it (double-click resets). Both are remembered |

@@ -9,6 +9,8 @@ import { DATA_DIR, writeJsonAtomic } from './store.ts';
 export const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 export const PROVIDERS = ['anthropic', 'openai-compatible'] as const;
+export const REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 export type ProviderId = (typeof PROVIDERS)[number];
 
 const builtinSchema = z.object({
@@ -30,6 +32,11 @@ const builtinSchema = z.object({
   maxRepairs: z.number().int().min(0).max(5).default(2),
   /** Per request to the provider. */
   timeoutMs: z.number().int().min(10_000).max(900_000).default(300_000),
+  /**
+   * How hard reasoning models think. 'default' sends nothing (the model decides). OpenAI-compatible: sent
+   * as reasoning_effort (OpenRouter: reasoning.effort). Anthropic: turns on extended thinking with a budget.
+   */
+  reasoningEffort: z.enum(REASONING_EFFORTS).default('default'),
   /** USD per million tokens, from the provider's price page. Without them, cost is unknown (tokens still count). */
   pricing: z
     .object({
@@ -158,6 +165,7 @@ export function publicConfig() {
       maxToolCalls: r.maxToolCalls,
       maxRepairs: r.maxRepairs,
       timeoutMs: r.timeoutMs,
+      reasoningEffort: r.reasoningEffort,
       pricing: r.pricing,
     },
     budget: current.budget,
