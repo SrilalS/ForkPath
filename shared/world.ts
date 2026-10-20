@@ -84,6 +84,21 @@ export function startYear(n: TLNode): number | null {
   return y === null ? null : Math.floor(y);
 }
 
+/**
+ * The node's start year, or for an undated node (a deviation typed without a date, say) the start year of
+ * the nearest dated node before it on its path: it happens no earlier than that. Null only when nothing
+ * on the path is dated.
+ */
+export function effectiveYear(tl: Timeline, id: string): number | null {
+  let cur: TLNode | undefined = tl.nodes[id];
+  while (cur) {
+    const y = startYear(cur);
+    if (y !== null) return y;
+    cur = cur.parentId ? tl.nodes[cur.parentId] : undefined;
+  }
+  return null;
+}
+
 export type LinkCheck = { ok: true } | { ok: false; reason: string };
 
 /**

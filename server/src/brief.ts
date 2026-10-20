@@ -1,6 +1,7 @@
 import { SIGNIFICANCES, type Job, type Significance, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
 import {
   ancestorIds,
+  effectiveYear,
   INFLUENCE_WINDOW_YEARS,
   startYear,
   streamLabel,
@@ -84,7 +85,7 @@ function threadContext(
   chain: TLNode[],
   anchor: TLNode,
   exclude: Set<string>,
-  anchorYear: number | null = startYear(anchor),
+  anchorYear: number | null = effectiveYear(tl, anchor.id),
 ): string[] {
   const out: string[] = [];
   const inChain = new Set(chain.map((n) => n.id));
@@ -140,7 +141,7 @@ export function linkCandidates(tl: Timeline, anchor: TLNode, exclude: Set<string
   const out: Candidate[] = [];
   for (const n of Object.values(tl.nodes)) {
     if (n.status !== 'ready' || n.id === anchor.id || exclude.has(n.id) || upstream.has(n.id) || downstream.has(n.id)) continue;
-    const y = startYear(n);
+    const y = effectiveYear(tl, n.id);
     const gap = y === null || anchorYear === null ? null : y - anchorYear;
     if (gap !== null && gap > INFLUENCE_WINDOW_YEARS) continue;
     if (!ix.sameWorld(n.id, anchor.id)) continue;
@@ -159,7 +160,7 @@ export function nearbyEvents(tl: Timeline, anchor: TLNode, exclude: Set<string>,
 
 /** The year a new node written after `parents` starts at the earliest: the latest of their start years. */
 function latestStart(tl: Timeline, ids: (string | undefined)[]): number | null {
-  const years = ids.map((id) => (id && tl.nodes[id] ? startYear(tl.nodes[id]) : null)).filter((y): y is number => y !== null);
+  const years = ids.map((id) => (id && tl.nodes[id] ? effectiveYear(tl, id) : null)).filter((y): y is number => y !== null);
   return years.length ? Math.max(...years) : null;
 }
 
@@ -171,7 +172,7 @@ export function jobScope(tl: Timeline, job: Job): { anchor: TLNode; anchorYear: 
   const anchor = tl.nodes[job.targetNodeId];
   if (!anchor) return null;
   const pathIds = (id: string | undefined) => (id && tl.nodes[id] ? pathTo(tl, id).map((n) => n.id) : []);
-  if (job.type === 'regenerate') return { anchor, anchorYear: startYear(anchor), exclude: new Set([anchor.id]) };
+  if (job.type === 'regenerate') return { anchor, anchorYear: effectiveYear(tl, anchor.id), exclude: new Set([anchor.id]) };
   const others = job.type === 'merge' ? (job.mergeWith ?? []) : job.type === 'influence' ? [job.influenceFrom] : [];
   return {
     anchor,

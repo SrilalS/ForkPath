@@ -2,7 +2,7 @@
 // that may influence the node, however old. Output is plain text sized for a model's context: events older
 // than the influence window show only their key changes, which is what an old event leaves behind.
 import type { Job, Timeline, TLNode } from '../../shared/types.ts';
-import { INFLUENCE_WINDOW_YEARS, startYear, streamLabel, WorldIndex } from '../../shared/world.ts';
+import { effectiveYear, INFLUENCE_WINDOW_YEARS, streamLabel, WorldIndex } from '../../shared/world.ts';
 import { jobScope, linkCandidates, type Candidate } from './brief.ts';
 
 export const SEARCH_DEFAULT_LIMIT = 6;
@@ -65,7 +65,7 @@ export function searchForJob(tl: Timeline, job: Job, opts: SearchOptions): strin
   const words = terms(opts.query);
   const limit = Math.min(Math.max(1, opts.limit ?? SEARCH_DEFAULT_LIMIT), SEARCH_MAX_LIMIT);
   const pool = linkCandidates(tl, scope.anchor, scope.exclude, scope.anchorYear).filter(({ node }) => {
-    const y = startYear(node);
+    const y = effectiveYear(tl, node.id);
     if (opts.before !== undefined && (y === null || y >= opts.before)) return false;
     if (opts.after !== undefined && (y === null || y <= opts.after)) return false;
     return true;
@@ -74,7 +74,7 @@ export function searchForJob(tl: Timeline, job: Job, opts: SearchOptions): strin
     words.length
       ? pool.map((c) => ({ c, s: score(c.node, words) })).filter((x) => x.s > 0)
       : pool.map((c) => ({ c, s: 0 })) // filters only: newest first
-  ).sort((a, b) => b.s - a.s || (startYear(b.c.node) ?? -Infinity) - (startYear(a.c.node) ?? -Infinity));
+  ).sort((a, b) => b.s - a.s || (effectiveYear(tl, b.c.node.id) ?? -Infinity) - (effectiveYear(tl, a.c.node.id) ?? -Infinity));
 
   const filters = [opts.before !== undefined && `before ${opts.before}`, opts.after !== undefined && `after ${opts.after}`].filter(Boolean);
   const label = `"${opts.query}"${filters.length ? ` (${filters.join(', ')})` : ''}`;
