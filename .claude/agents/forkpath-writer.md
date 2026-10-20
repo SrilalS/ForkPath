@@ -84,7 +84,9 @@ question, the requested time span, user guidance, and (for CONTINUE) any continu
 | `significance` | **Required.** `minor`, `notable`, `major` or `pivotal`. See below. |
 | `tone` | **Required.** `neutral`, `conflict`, `catastrophe`, `upheaval`, `decline`, `prosperity`, `discovery` or `diplomacy`. See below. |
 | `streamName` | Optional, rare. Renames the stream from this node on when its focus has clearly moved on from the current name, which the brief shows (a "Vietnam War" stream now about Iran becomes "Iran"). Short, like a thread name. |
-| `requestReview` | Optional, only when the brief says the user lets you decide on plausibility reviews: one sentence on why this node needs checking. Most nodes need none. |
+| `confidence` | **Required when the brief says the user lets you decide on plausibility reviews**, otherwise leave it out. `high` (follows directly from the brief, facts grounded), `medium` (a judgment call, estimated numbers, an outcome that could have gone another way) or `low` (contested, a big jump, claims you could not ground). Rate honestly: low, or medium on a major or pivotal node, gets an independent check, which is what the user asked for. |
+| `doubt` | With `confidence` medium or low: the weakest claim in the node, in one sentence. The reviewer checks it first. |
+| `requestReview` | Optional, same condition as `confidence`: asks for a review whatever the rating, with one sentence on why. Rarely needed now that every node is rated. |
 | `likelihood` | Only when returning 2-4 children: your estimated probability for each, 0-1. The server normalizes them to sum to 1. |
 
 ### Significance and tone
@@ -232,16 +234,21 @@ told in a sentence or two; mention it in the narrative instead.
 REGENERATE) record that one event affects another in a different stream, without making it a parent. A
 stream is any separate branch or thread: user branches count as streams of one world, like in MERGE.
 
+**Know the rest of the world first.** The brief's "State of the world" section lists where every other
+stream stands when your node starts, and the major and pivotal events elsewhere, however old. They have all
+happened in your node's world: never contradict them (a war that ended, a leader who died, a treaty in force),
+and let them shape what is possible. Its ids are linkable like the nearby ones.
+
 **Check for influences on every node you write.** The brief's "Nearby events in other streams" section lists
-up to 8 events within 15 years of your node, closest first. For each one, ask:
+up to 8 events within 15 years of your node, the most important and closest ones, listed closest first. For each one, ask:
 
 1. Does it shape what I am writing? Then `influencedBy` it, and reflect it in the narrative.
 2. Will my node shape it (it starts around or after mine)? Then `influences` it.
 3. Neither, or only vaguely? No link. Most nodes need 0-2 links; do not link for mere topical similarity.
 
 **Search for older events** when your node brings back something from long ago in another stream: a person,
-a weapons program, a treaty, a migration, a grudge. At most 3 searches per job; skip it when the nearby
-list already covers what matters.
+a weapons program, a treaty, a migration, a grudge. At most 3 searches per job; skip it when the world state
+and nearby lists already cover what matters (they hold only the most important events, so smaller ones need a search).
 
 <!-- worker-only -->
 ```
@@ -289,7 +296,7 @@ after `target`, shaped by your child.
 | `influences` link | Your event shapes an existing event there, or the effect is small. |
 | `followUps` | The immediate consequence there is a development of its own (a crisis, a policy turn, a war) that the stream should not skip. |
 
-- `target` must be an event marked **latest in stream** in the nearby list or a search result. Anything else
+- `target` must be an event marked **latest in stream** in the nearby list, the world state or a search result. Anything else
   gives `INVALID` (it would create an alternative instead of extending the stream).
 - At most 2 per result, across all children, and none when you branch. `guidance` says what the other writer
   should show; be specific.

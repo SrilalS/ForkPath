@@ -146,6 +146,10 @@ function threadContext(
   const recent = new Set(chain.slice(-RECENT_LINK_DEPTH).map((n) => n.id));
   const touching = tl.links.filter((l) => (inChain.has(l.from) || inChain.has(l.to)) && tl.nodes[l.from] && tl.nodes[l.to]);
   const links = touching.filter((l) => recent.has(l.from) || recent.has(l.to));
+
+  // Everything the links and nearby list below already describe is left out of the world state.
+  const shown = new Set([...nearby.map((c) => c.node.id), ...links.flatMap((l) => [l.from, l.to])]);
+  out.push(...worldStateLines(tl, anchor, new Set([...exclude, ...inChain]), anchorYear, shown));
   if (links.length) {
     out.push('', '## Influence links touching this storyline');
     // Each outside event's summary once, and not at all when the nearby list below already gives it.
@@ -209,12 +213,110 @@ export function linkCandidates(tl: Timeline, anchor: TLNode, exclude: Set<string
   return out;
 }
 
-/** Candidates within the window either side of the anchor, closest first (the brief's "nearby" list). */
+/** How much a candidate's significance counts when picking the nearby list (one step = one level). */
+const SIGNIFICANCE_WEIGHT: Record<Significance, number> = { minor: 0, notable: 1, major: 2, pivotal: 3 };
+/** How much being close in time counts, at most (same year), against SIGNIFICANCE_WEIGHT. */
+const CLOSENESS_WEIGHT = 1.5;
+
+/**
+ * Candidates within the window either side of the anchor (the brief's "nearby" list). Picked by importance
+ * and closeness together, so a run of minor events in a busy stream cannot crowd out a major one a few
+ * years further off: a same-year notable event ties with a major one about ten years away. Listed closest first.
+ */
 export function nearbyEvents(tl: Timeline, anchor: TLNode, exclude: Set<string>, anchorYear: number | null) {
+  const score = (c: { node: TLNode; gap: number }) =>
+    SIGNIFICANCE_WEIGHT[c.node.significance] + CLOSENESS_WEIGHT * (1 - Math.abs(c.gap) / INFLUENCE_WINDOW_YEARS);
   return linkCandidates(tl, anchor, exclude, anchorYear)
     .filter((c): c is { node: TLNode; gap: number } => c.gap !== null && Math.abs(c.gap) <= INFLUENCE_WINDOW_YEARS)
-    .sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap) || a.gap - b.gap)
-    .slice(0, MAX_NEARBY);
+    .sort((a, b) => score(b) - score(a) || Math.abs(a.gap) - Math.abs(b.gap))
+    .slice(0, MAX_NEARBY)
+    .sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap) || a.gap - b.gap);
+}
+
+/** At most this many other streams are summarized in "State of the world". */
+const MAX_STREAM_STATES = 10;
+/** At most this many earlier major or pivotal events from other streams are listed there. */
+const MAX_TURNING_POINTS = 14;
+/** Key changes shown per entry there: a stream's current state, and an older turning point. */
+const STATE_KEY_CHANGES = 3;
+const TURNING_KEY_CHANGES = 2;
+
+const clip = (s: string, max = 160) => (s.length > max ? `${s.slice(0, max - 3)}...` : s);
+
+/**
+ * What the rest of the world looks like when the new node starts: where every other stream stands (its
+ * latest event by then) and the major or pivotal events elsewhere, however old. The nearby list only reaches
+ * INFLUENCE_WINDOW_YEARS and its MAX_NEARBY closest events, which left most of a busy world's turning points
+ * unseen. Entries already in the nearby list are not repeated.
+ *
+ * Exclusive alternatives in another stream can all count as "the same world" as the anchor (it descends from
+ * none of them); only the most likely consistent set is shown, so the writer never reads two outcomes of
+ * one fork as both having happened.
+ */
+export function worldState(tl: Timeline, anchor: TLNode, exclude: Set<string>, anchorYear: number | null, shown: Set<string>) {
+  const ix = new WorldIndex(tl);
+  // Only what has happened by the time the new node starts (undated events count: they have no later date).
+  const past = linkCandidates(tl, anchor, exclude, anchorYear).filter((c) => c.gap === null || c.gap <= 0);
+  const pastIds = new Set(past.map((c) => c.node.id));
+  const continues = (id: string) => ix.children(id).some((c) => c.parentId === id && !c.threadName && pastIds.has(c.id));
+
+  // One consistent world: most likely first, skipping anything that conflicts with what is already kept.
+  const kept: TLNode[] = [];
+  let dropped = 0;
+  const keep = (n: TLNode) => {
+    if (kept.some((k) => !ix.sameWorld(k.id, n.id))) {
+      dropped++;
+      return false;
+    }
+    kept.push(n);
+    return true;
+  };
+  const byOdds = (a: { node: TLNode }, b: { node: TLNode }) => ix.pathOdds(b.node.id) - ix.pathOdds(a.node.id);
+
+  const states = past
+    .filter((c) => !continues(c.node.id))
+    .sort((a, b) => byOdds(a, b) || (b.gap ?? -Infinity) - (a.gap ?? -Infinity))
+    .filter((c) => keep(c.node))
+    .slice(0, MAX_STREAM_STATES);
+  const stateIds = new Set(states.map((c) => c.node.id));
+  const turning = past
+    .filter((c) => !stateIds.has(c.node.id) && !shown.has(c.node.id))
+    .filter((c) => c.node.significance === 'major' || c.node.significance === 'pivotal')
+    .sort((a, b) => byOdds(a, b) || SIGNIFICANCE_WEIGHT[b.node.significance] - SIGNIFICANCE_WEIGHT[a.node.significance] || (b.gap ?? -Infinity) - (a.gap ?? -Infinity))
+    .filter((c) => keep(c.node))
+    .slice(0, MAX_TURNING_POINTS)
+    // Read as history: oldest first.
+    .sort((a, b) => (a.gap ?? -Infinity) - (b.gap ?? -Infinity));
+  return { states: states.filter((c) => !shown.has(c.node.id)), turning, dropped };
+}
+
+function worldStateLines(tl: Timeline, anchor: TLNode, exclude: Set<string>, anchorYear: number | null, shown: Set<string>): string[] {
+  const { states, turning, dropped } = worldState(tl, anchor, exclude, anchorYear, shown);
+  if (!states.length && !turning.length) return [];
+  const ix = new WorldIndex(tl);
+  const when = (gap: number | null) => (gap === null ? '' : gap === 0 ? ', same year' : `, ${-gap}y earlier`);
+  const changes = (n: TLNode, k: number) => n.keyChanges.slice(0, k).map((c) => clip(c)).join('; ') || firstSentence(n.summary);
+  const out = [
+    '',
+    `## State of the world${anchorYear !== null ? ` in ${anchorYear}` : ''}: other streams`,
+    'All of this has already happened in the same world as your node and stays true unless something changes it. ' +
+      'Keep your node consistent with it, and link any event that genuinely shapes yours (ids are linkable).',
+  ];
+  if (states.length) {
+    out.push('Where each other stream stands (its latest event by then):');
+    for (const { node, gap } of states) {
+      const tip = ix.isTip(node.id) ? ', latest in stream' : '';
+      out.push(`- [${streamLabel(tl, node.id)}${when(gap)}${tip}] ${short(node)}: ${changes(node, STATE_KEY_CHANGES)}`);
+    }
+  }
+  if (turning.length) {
+    out.push('Earlier turning points elsewhere (major and pivotal, oldest first):');
+    for (const { node, gap } of turning) {
+      out.push(`- [${streamLabel(tl, node.id)}${when(gap)}, ${node.significance}] ${short(node)}: ${changes(node, TURNING_KEY_CHANGES)}`);
+    }
+  }
+  if (dropped) out.push(`(${dropped} events on less likely alternative outcomes in other streams are left out.)`);
+  return out;
 }
 
 /** The year a new node written after `parents` starts at the earliest: the latest of their start years. */
@@ -311,7 +413,8 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
     'Optional on any node you write: "influences" / "influencedBy": [ { "node": "<existing id or @key>", "strength": "mild", "note": "" } ]. ' +
     'Give a node "key": "india" so other nodes in this same result can link to it as "@india".';
   const narrative = job.detail === 'story' ? '' : '- <when>: <who did what, where, with numbers>\\n- ...\\nWhy: <the causal chain>';
-  const node = `"title": "", "period": "", "summary": "", "narrative": "${narrative}", "keyChanges": [""], "significance": "notable", "tone": "neutral"`;
+  const confidence = job.review === 'auto' ? ', "confidence": "high", "doubt": ""' : '';
+  const node = `"title": "", "period": "", "summary": "", "narrative": "${narrative}", "keyChanges": [""], "significance": "notable", "tone": "neutral"${confidence}`;
   const example =
     job.type === 'influence'
       ? `{ "children": [ { ${node}, "influences": [], "influencedBy": [] } ], "influenceNote": "" }`
@@ -333,12 +436,7 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
     ...calibrationLines(tl, shape === 'node' ? job.targetNodeId : (job.placeholderId ?? '')),
     linkHint,
     streamNameHint(tl, job, shape),
-    ...(job.review === 'auto'
-      ? [
-          'Plausibility review: the user lets you decide. Add "requestReview": "<why>" to any node you write that you are unsure holds up ' +
-            '(a contested outcome, numbers you could not ground, a big jump from the chain). Another writer then checks it. Most nodes need none.',
-        ]
-      : []),
+    ...(job.review === 'auto' ? CONFIDENCE_LINES : []),
   ];
   if (shape === 'node') return [...lines, 'Regenerate never branches: return exactly one node.'];
   lines.push(...followUpLines(job));
@@ -361,6 +459,19 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
   ];
 }
 
+/**
+ * Review option "auto": every node gets a required rating instead of an opt-in request, because writers
+ * almost never volunteer doubt (no review was ever requested under the old opt-in wording).
+ */
+const CONFIDENCE_LINES = [
+  'Plausibility review: the user lets you decide, so EVERY node you write needs "confidence" (required):',
+  '- "high": it follows directly from the brief, and its facts and numbers are grounded in it or in real history.',
+  '- "medium": plausible, but it rests on a judgment call, numbers you estimated, or an outcome that could reasonably have gone another way.',
+  '- "low": a contested outcome, a big jump from the chain, or claims you could not ground.',
+  'For medium or low, add "doubt": the weakest claim, in one sentence. Low, or medium on a major or pivotal node, sends the node to an independent plausibility check. ' +
+    'Rating honestly is the point: the user asked for checks where they help, and a check is cheap next to a weak event the rest of the timeline builds on.',
+];
+
 /** Lets the writer rename the stream when the story has moved on from its current name. */
 function streamNameHint(tl: Timeline, job: Job, shape: 'children' | 'node'): string {
   const target = tl.nodes[job.targetNodeId];
@@ -382,7 +493,7 @@ function followUpLines(job: Job): string[] {
   return [
     `Optional on a child: "followUps": [ { "target": "<id>", "strength": "moderate", "guidance": "<the consequence to show>" } ] (at most ${MAX_FOLLOW_UPS} per result). ` +
       'Each one makes another writer add a NEW event to a different stream, right after `target`, showing the immediate consequence of your child there. ' +
-      '`target` must be marked "latest in stream" in the nearby list or a search result. ' +
+      '`target` must be marked "latest in stream" in the nearby list, the world state or a search result. ' +
       'Use it only when the consequence there is big enough for its own event; for a smaller effect, link with "influences" instead. Most results need none.',
   ];
 }

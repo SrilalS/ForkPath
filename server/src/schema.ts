@@ -11,6 +11,10 @@ import {
 } from '../../shared/types.ts';
 import { REASONING_EFFORTS } from './config.ts';
 
+/** How sure the writer is that a node holds up (asked for when the user lets the writer decide on reviews). */
+export const CONFIDENCES = ['high', 'medium', 'low'] as const;
+export type Confidence = (typeof CONFIDENCES)[number];
+
 const text = (max: number) => z.string().trim().min(1).max(max);
 const significance = z.enum(SIGNIFICANCES);
 const tone = z.enum(TONES);
@@ -47,6 +51,16 @@ const nodeContent = {
   tone,
   /** Only read when the request's review option is "auto": why this node should get a plausibility review. */
   requestReview: z.string().trim().min(1).max(300).optional(),
+  /**
+   * Required when the review option is "auto" (checked in apply.ts): how well the node holds up. Not high
+   * also needs `doubt`. Low, or medium on a major or pivotal node, gets a plausibility review.
+   */
+  confidence: z.enum(CONFIDENCES).optional(),
+  /**
+   * The weakest claim in the node, in one sentence: what a reviewer should check first. Empty counts as
+   * absent: models copy the brief's example ("doubt": "") on high-confidence nodes.
+   */
+  doubt: z.string().trim().max(300).optional(),
 };
 
 // Model results are strict: an unknown or misspelled field ("influenced_by", followUps on a thread start)
