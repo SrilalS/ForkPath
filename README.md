@@ -111,6 +111,7 @@ cost and time for built-in jobs) at the bottom of its side panel.
 | ⤚⤙ Merge | **Merge with...** on a node, click 1-4 nodes on separate branches, then **Merge N**. The model writes where the storylines meet; Branch A wins conflicts unless your guidance says otherwise |
 | ✏️ Edit | Rewrite any field, including the stream name. Later and influenced nodes get marked **Stale** |
 | ♻️ Regenerate, Keep | **Regenerate** rewrites a node to fit what came before (optional guidance). **Keep** or **Keep whole branch** clears the stale mark |
+| 🔍 Review | **Review** in the side panel: another writer checks the event for contradictions, anachronisms, unearned outcomes, causality gaps and numbers out of scale (a REVIEW job: no search tools, a compact brief, about a third to half of a writing job). The verdict and flags show in the panel, problems as a badge on the card; **Fix with Regenerate** sends the fixes as guidance. Editing or regenerating the event clears its review |
 | ★ Most likely | Top bar toggle. Fades every node outside the most likely history: at each fork, the outcome the model rated highest |
 | ⑂ Turning points | Top bar. A date-ordered list of every fork (with each outcome's share) and every pivotal event; click one to jump to it |
 | ◷ Align by time | Top bar toggle. Columns follow each node's start date, so events in different branches line up. Remembered per timeline |
@@ -129,6 +130,7 @@ Every Continue, Branch, Merge, Influence and Regenerate form has these, stored p
 | Guidance | Free text the writer must follow |
 | Temperament | **Realist** (default: incentives, capabilities and base rates decide), **Grim** or **Hopeful** (lean that way only when outcomes are close) |
 | Narrative | **Beats** (default: dated bullet points that keep every fact an essay would, plus a "Why:" line) or **Full story** (prose paragraphs) |
+| Plausibility review | **Off** (default), **Agent decides** (the writer adds `requestReview` to nodes it is unsure of) or **Every event**. Follow-ups inherit it |
 
 ### 🧠 What the writer does on its own
 
@@ -155,7 +157,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 
 - On startup, older files in `data/timelines/` are upgraded in place. The original is kept as `<id>.v<N>.bak.json`.
 - Imports run the same migrations, so old exports always open.
-- Current version: **v6** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links, v5 added stream renames `streamName`, v6 added the per-node `generation` record).
+- Current version: **v7** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links, v5 added stream renames `streamName`, v6 added the per-node `generation` record, v7 added the per-node plausibility `review`).
 - A file from a newer app version is rejected with a clear message instead of being half-loaded.
 - To change the format: bump `SCHEMA_VERSION` and add a step in `server/src/migrate.ts` keyed by the old version.
 

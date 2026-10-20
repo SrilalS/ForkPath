@@ -28,6 +28,8 @@ const steps: Record<number, (tl: Raw) => Raw> = {
   4: (tl) => tl,
   // v5 -> v6: optional node generation record. Older nodes simply have none.
   5: (tl) => tl,
+  // v6 -> v7: optional node review (plausibility check). Older nodes simply have none.
+  6: (tl) => tl,
 };
 
 export class MigrationError extends Error {}

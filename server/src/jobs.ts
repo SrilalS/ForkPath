@@ -281,6 +281,23 @@ export function cancelJobsForNodes(timelineId: string, nodeIds: Set<string>) {
   }
 }
 
+/** Cancels open REVIEW jobs for one node: its content changed, or a newer review replaces them. */
+export function cancelReviewJobs(timelineId: string, nodeId: string) {
+  let changed = false;
+  for (const job of jobs.values()) {
+    if (job.timelineId !== timelineId || job.type !== 'review' || job.targetNodeId !== nodeId) continue;
+    if (job.status !== 'pending' && job.status !== 'claimed') continue;
+    job.status = 'cancelled';
+    job.finishedAt = now();
+    changed = true;
+  }
+  if (changed) {
+    persist();
+    queueChanged();
+    broadcastStatus();
+  }
+}
+
 export function cancelJobsForTimeline(timelineId: string) {
   for (const job of jobs.values()) {
     if (job.timelineId === timelineId && (job.status === 'pending' || job.status === 'claimed')) {

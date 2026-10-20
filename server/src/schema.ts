@@ -1,5 +1,14 @@
 import { z } from 'zod';
-import { DETAILS, SIGNIFICANCES, STRENGTHS, TEMPERAMENTS, TONES } from '../../shared/types.ts';
+import {
+  DETAILS,
+  REVIEW_FLAG_KINDS,
+  REVIEW_MODES,
+  REVIEW_VERDICTS,
+  SIGNIFICANCES,
+  STRENGTHS,
+  TEMPERAMENTS,
+  TONES,
+} from '../../shared/types.ts';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const significance = z.enum(SIGNIFICANCES);
@@ -35,6 +44,8 @@ const nodeContent = {
   keyChanges: z.array(text(300)).min(2, 'give 3-6 key changes').max(8, 'give 3-6 key changes'),
   significance,
   tone,
+  /** Only read when the request's review option is "auto": why this node should get a plausibility review. */
+  requestReview: z.string().trim().min(1).max(300).optional(),
 };
 
 // Model results are strict: an unknown or misspelled field ("influenced_by", followUps on a thread start)
@@ -130,6 +141,22 @@ export const continueResult = z
 
 export const regenerateResult = z.strictObject({ node: z.strictObject({ ...nodeContent, streamName, ...links }) });
 
+/** A REVIEW job's result: a verdict on one node and what is wrong with it (nothing, when plausible). */
+export const reviewResult = z
+  .strictObject({
+    verdict: z.enum(REVIEW_VERDICTS),
+    summary: text(400),
+    flags: z
+      .array(z.strictObject({ kind: z.enum(REVIEW_FLAG_KINDS), text: text(400), fix: text(400) }))
+      .max(5)
+      .default([]),
+  })
+  .superRefine((val, ctx) => {
+    if (val.verdict !== 'plausible' && !val.flags.length) {
+      ctx.addIssue({ code: 'custom', path: ['flags'], message: `a "${val.verdict}" verdict needs at least one flag saying what is wrong` });
+    }
+  });
+
 export type LinkRef = z.infer<typeof linkRef>;
 
 export const linkInput = z.object({
@@ -167,6 +194,7 @@ export const generateOptions = z.object({
   guidance: z.string().trim().max(1000).optional(),
   temperament: z.enum(TEMPERAMENTS).optional(),
   detail: z.enum(DETAILS).optional(),
+  review: z.enum(REVIEW_MODES).optional(),
 });
 
 export const influenceInput = generateOptions.extend({

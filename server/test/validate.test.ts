@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Job, Timeline, TLNode } from '../../shared/types.ts';
-import { continueResult, regenerateResult } from '../src/schema.ts';
+import { continueResult, regenerateResult, reviewResult } from '../src/schema.ts';
 import { applyContinue, continueIssues, regenerateIssues } from '../src/apply.ts';
 
 let clock = 0;
@@ -100,4 +100,21 @@ test('apply: alternatives sorted by likelihood, repeated stream name ignored', (
   const byTitle = (t: string) => Object.values(tl.nodes).find((n) => n.title === t)!;
   assert.equal(byTitle('More').streamName, 'New focus');
   assert.equal(byTitle('Less').streamName, undefined);
+});
+
+test('reviewResult: a problem verdict needs a flag; unknown fields are invalid', () => {
+  const flag = { kind: 'unearned', text: 't', fix: 'f' };
+  assert.equal(reviewResult.safeParse({ verdict: 'plausible', summary: 's' }).success, true);
+  assert.equal(reviewResult.safeParse({ verdict: 'questionable', summary: 's', flags: [] }).success, false);
+  assert.equal(reviewResult.safeParse({ verdict: 'implausible', summary: 's', flags: [flag] }).success, true);
+  assert.equal(reviewResult.safeParse({ verdict: 'plausible', summary: 's', score: 3 }).success, false);
+  assert.equal(reviewResult.safeParse({ verdict: 'questionable', summary: 's', flags: [{ ...flag, kind: 'vibes' }] }).success, false);
+});
+
+test('requestReview is accepted on children and thread starts', () => {
+  const r = continueResult.parse({
+    children: [child({ requestReview: 'casualty numbers are a guess', spawnThreads: [{ thread: 'T', ...child({ requestReview: 'why' }) }] })],
+  });
+  const report = applyContinue(world(), job({ review: 'auto' }), r);
+  assert.deepEqual(report.created.map((c) => c.reviewReason), ['casualty numbers are a guess', 'why']);
 });

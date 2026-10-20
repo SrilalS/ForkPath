@@ -1,6 +1,6 @@
 ---
 name: althistory-writer
-description: Writes one AltHistory generation job (CONTINUE, MERGE, INFLUENCE or REGENERATE) given its job id, submits the result, and reports one line. Used by the AltHistory worker dispatcher; one subagent per job.
+description: Writes one AltHistory generation job (CONTINUE, MERGE, INFLUENCE, REGENERATE or REVIEW) given its job id, submits the result, and reports one line. Used by the AltHistory worker dispatcher; one subagent per job.
 tools: Bash, Read, Write, Edit
 model: inherit
 ---
@@ -44,6 +44,7 @@ node worker/submit.mjs <id>
 | `MERGE` | Same shape as CONTINUE | ✅ yes |
 | `INFLUENCE` | Same shape as CONTINUE, plus `"influenceNote"` | ✅ yes, rarely |
 | `REGENERATE` | `{ "node": { ... } }` | ❌ no, exactly one node |
+| `REVIEW` | `{ "verdict": "...", "summary": "...", "flags": [ ... ] }` (section 5b) | ❌ you write nothing new |
 
 **INFLUENCE** means the user picked an event in one stream and said it affects another stream. You write the
 next event in the **influenced** stream (after the node the brief names), and that event must visibly react
@@ -83,6 +84,7 @@ question, the requested time span, user guidance, and (for CONTINUE) any continu
 | `significance` | **Required.** `minor`, `notable`, `major` or `pivotal`. See below. |
 | `tone` | **Required.** `neutral`, `conflict`, `catastrophe`, `upheaval`, `decline`, `prosperity`, `discovery` or `diplomacy`. See below. |
 | `streamName` | Optional, rare. Renames the stream from this node on when its focus has clearly moved on from the current name, which the brief shows (a "Vietnam War" stream now about Iran becomes "Iran"). Short, like a thread name. |
+| `requestReview` | Optional, only when the brief says the user lets you decide on plausibility reviews: one sentence on why this node needs checking. Most nodes need none. |
 | `likelihood` | Only when returning 2-4 children: your estimated probability for each, 0-1. The server normalizes them to sum to 1. |
 
 ### Significance and tone
@@ -407,6 +409,33 @@ Guidance: "One branch on India's southern states, another on Sri Lanka rebuildin
 ```json
 {
   "node": { "title": "...", "period": "...", "summary": "...", "narrative": "...", "keyChanges": ["..."], "significance": "notable", "tone": "neutral" }
+}
+```
+
+---
+
+## 5b. REVIEW jobs
+
+You check one existing event for plausibility. You do not rewrite it, and you write no nodes. The brief has the
+storyline up to the event, the event in full, and the checklist (contradiction, anachronism, unearned,
+causality, scale).
+
+- Judge by the chain (canon, including user edits), real-world constraints and the base rates of comparable
+  real situations. Apply rule 8 both ways: an unearned truce is as wrong as an unearned war.
+- Flag only real problems, most serious first, at most 5. Style, tone and taste are not problems. A
+  surprising outcome with a clear cause is plausible.
+- `verdict`: `plausible` (flags empty, or at most 2 minor notes), `questionable` (real problems a rewrite
+  should fix), `implausible` (the core of the event does not hold up). Anything but `plausible` needs a flag.
+- Each flag: `kind`, `text` (the specific claim that fails, and why), `fix` (what a rewrite should change).
+  The user can send your flags straight to Regenerate as guidance, so make the fix actionable.
+
+```json
+{
+  "verdict": "questionable",
+  "summary": "The ceasefire arrives one month after the heaviest strikes with no party able to force it.",
+  "flags": [
+    { "kind": "unearned", "text": "Oman brokers a full ceasefire in October 2027, but neither side has lost the means to fight and no outside power applies pressure.", "fix": "Have the fighting continue at lower intensity, or name who forces the deal and with what leverage." }
+  ]
 }
 ```
 

@@ -1,6 +1,15 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import type { DeviationInput, GenerateOptions } from '../api.ts';
-import { DETAILS, STRENGTHS, TEMPERAMENTS, type Detail, type Strength, type Temperament } from '../../../shared/types.ts';
+import {
+  DETAILS,
+  REVIEW_MODES,
+  STRENGTHS,
+  TEMPERAMENTS,
+  type Detail,
+  type ReviewMode,
+  type Strength,
+  type Temperament,
+} from '../../../shared/types.ts';
 
 export const SPAN_PRESETS = ['Auto', '1 year', '5 years', '10 years', '25 years', '50 years', '100 years'];
 
@@ -75,7 +84,31 @@ export function DetailField({ value, onChange }: { value: Detail | undefined; on
   );
 }
 
-/** Time span chips plus a custom value, optional guidance, the temperament and the narrative format. */
+export const REVIEW_INFO: Record<ReviewMode, { label: string; icon: string; hint: string }> = {
+  off: { label: 'Off', icon: '⏸️', hint: 'No automatic plausibility check. You can still review any event from its panel.' },
+  auto: { label: 'Agent decides', icon: '🤔', hint: 'The writer asks for a check on events it is unsure of. Most get none, so it costs little.' },
+  always: { label: 'Every event', icon: '🔍', hint: 'Every event this writes gets a plausibility check (about a third of a writing job each).' },
+};
+
+/** Plausibility reviews for this one request. Off is the default. */
+export function ReviewField({ value, onChange }: { value: ReviewMode | undefined; onChange: (r: ReviewMode) => void }) {
+  const current = value ?? 'off';
+  return (
+    <label className="field">
+      <span className="field__label">Plausibility review</span>
+      <div className="chips">
+        {REVIEW_MODES.map((r) => (
+          <button type="button" key={r} className={`chip ${current === r ? 'is-active' : ''}`} onClick={() => onChange(r)} title={REVIEW_INFO[r].hint}>
+            {REVIEW_INFO[r].icon} {REVIEW_INFO[r].label}
+          </button>
+        ))}
+      </div>
+      <span className="field__hint">{REVIEW_INFO[current].hint}</span>
+    </label>
+  );
+}
+
+/** Time span chips plus a custom value, optional guidance, the temperament, the narrative format and reviews. */
 export function GenerateOptionsFields({ value, onChange }: { value: GenerateOptions; onChange: (v: GenerateOptions) => void }) {
   const span = value.timeSpan ?? '';
   const isPreset = span === '' || SPAN_PRESETS.includes(span);
@@ -128,6 +161,7 @@ export function GenerateOptionsFields({ value, onChange }: { value: GenerateOpti
       </label>
       <TemperamentField value={value.temperament} onChange={(temperament) => onChange({ ...value, temperament })} />
       <DetailField value={value.detail} onChange={(detail) => onChange({ ...value, detail })} />
+      <ReviewField value={value.review} onChange={(review) => onChange({ ...value, review })} />
     </>
   );
 }

@@ -143,8 +143,9 @@ async function attemptJob(
   }
   const session = createProvider(r).open({
     system: writerPrompt(),
-    tools: toolsFor(job),
-    maxToolCalls: r.maxToolCalls,
+    // A review judges what its brief shows: no searches, which keeps it cheap.
+    tools: job.type === 'review' ? [] : toolsFor(job),
+    maxToolCalls: job.type === 'review' ? 0 : r.maxToolCalls,
     maxOutputTokens: r.maxOutputTokens,
     timeoutMs: r.timeoutMs,
     signal: controller.signal,

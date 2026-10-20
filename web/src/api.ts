@@ -1,4 +1,4 @@
-import type { Detail, InfluenceLink, Strength, Temperament, Timeline, TimelineSummary, TLNode, WorkerStatus } from '../../shared/types.ts';
+import type { Detail, InfluenceLink, ReviewMode, Strength, Temperament, Timeline, TimelineSummary, TLNode, WorkerStatus } from '../../shared/types.ts';
 
 export interface DeviationInput {
   title: string;
@@ -16,6 +16,8 @@ export interface GenerateOptions {
   temperament?: Temperament;
   /** Narrative format; omitted means beats. */
   detail?: Detail;
+  /** Plausibility reviews of the written nodes; omitted means off. */
+  review?: ReviewMode;
 }
 
 export type NodeEdit = Partial<
@@ -128,6 +130,8 @@ export const api = {
     req<TLNode>('POST', node(tl, id, 'branch'), { deviation, autoContinue, options }),
   editNode: (tl: string, id: string, edit: NodeEdit) => req<TLNode>('PATCH', node(tl, id), edit),
   regenerate: (tl: string, id: string, opts: GenerateOptions = {}) => req<TLNode>('POST', node(tl, id, 'regenerate'), opts),
+  /** Queues a plausibility review of the node's current content. */
+  review: (tl: string, id: string) => req<TLNode>('POST', node(tl, id, 'review'), {}),
   keep: (tl: string, id: string, subtree = false) => req<TLNode>('POST', node(tl, id, 'keep'), { subtree }),
   cancel: (tl: string, id: string) => req('POST', node(tl, id, 'cancel'), {}),
   retry: (tl: string, id: string) => req<TLNode>('POST', node(tl, id, 'retry'), {}),

@@ -55,3 +55,14 @@ test('every node appears exactly once across prefix and body', () => {
   assert.ok(body.includes('Narrative of n20'), 'the node being continued is in full');
   assert.equal(buildBrief(cont('n20'), tl, 'api'), `${prefix}\n\n---\n\n${body}`);
 });
+
+test('a review brief shares the storyline prefix with writing jobs and asks for a verdict', () => {
+  const tl = line(21);
+  const review = { id: 'rev', type: 'review', timelineId: 't', targetNodeId: 'n20', status: 'claimed', createdAt: '' } as Job;
+  const r = buildBriefParts(review, tl, 'api');
+  // Reviewing n20 sees the chain up to n19, like continuing from n19 does.
+  assert.equal(r.prefix, buildBriefParts(cont('n19'), tl, 'api').prefix);
+  assert.ok(r.body.includes('REVIEW') && r.body.includes('"verdict"'));
+  assert.ok(r.body.includes('Narrative of n20'), 'the reviewed event is in full');
+  assert.ok(!r.body.includes('Nearby events'), 'no nearby list: reviews stay cheap');
+});

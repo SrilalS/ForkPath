@@ -128,6 +128,19 @@ function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
         {node.stale && <span className="tl-badge tl-badge--stale">Stale</span>}
         {node.source === 'llm-edited' && <span className="tl-badge">Edited</span>}
         {node.error && !errored && <span className="tl-badge tl-badge--error">Last regen failed</span>}
+        {node.review?.status === 'pending' && (
+          <span className="tl-badge" title="Plausibility review in progress">
+            🔍
+          </span>
+        )}
+        {node.review?.status === 'done' && node.review.verdict !== 'plausible' && (
+          <span
+            className={`tl-badge tl-badge--review-${node.review.verdict}`}
+            title={node.review.summary ?? 'Plausibility review found problems'}
+          >
+            {node.review.verdict === 'implausible' ? '⛔ Implausible' : '⚠ Questionable'}
+          </span>
+        )}
       </div>
 
       <Handle type="source" position={Position.Right} className="tl-handle" isConnectable={false} />

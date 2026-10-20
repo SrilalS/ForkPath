@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
-import { SCHEMA_VERSION, type Generation, type Job, type Detail, type Strength, type Temperament, type Timeline, type TLNode } from '../../shared/types.ts';
+import { SCHEMA_VERSION, type Generation, type Job, type Detail, type NodeReview, type ReviewMode, type Strength, type Temperament, type Timeline, type TLNode } from '../../shared/types.ts';
 import { streamLabel, WorldIndex } from '../../shared/world.ts';
 import { buildExport, exportFileName, importFile } from './transfer.ts';
 import { MigrationError } from './migrate.ts';
@@ -20,6 +20,7 @@ import { addClient, broadcast } from './events.ts';
 import {
   cancelJobsForNodes,
   cancelJobsForTimeline,
+  cancelReviewJobs,
   enqueue,
   finishJob,
   getJob,
@@ -56,6 +57,7 @@ import {
   linkInput,
   nodeEdit,
   regenerateResult,
+  reviewResult,
 } from './schema.ts';
 
 // Not PORT: dev tooling often sets PORT for the web server, which would collide with Vite.
@@ -118,8 +120,37 @@ const h =
 
 /** Jobs store a temperament only when it leans somewhere; realist is the default and stays implicit. */
 const lean = (t?: Temperament) => (t && t !== 'realist' ? t : undefined);
+/** Likewise the review option: off is the default. */
+const reviewOn = (r?: ReviewMode) => (r && r !== 'off' ? r : undefined);
 
-function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail }) {
+/**
+ * Queues a plausibility review of `node`'s current content. The node stays usable meanwhile; its review
+ * shows as pending. A newer request replaces an open one for the same node.
+ */
+function startReview(tl: Timeline, node: TLNode, requestedBy: NodeReview['requestedBy'], reason?: string) {
+  if (node.kind !== 'event') throw new HttpError(400, 'Only generated events can be reviewed');
+  if (node.status !== 'ready') throw new HttpError(409, 'Node is not ready yet');
+  cancelReviewJobs(tl.id, node.id);
+  const job = enqueue({ type: 'review', timelineId: tl.id, targetNodeId: node.id });
+  node.review = { status: 'pending', jobId: job.id, requestedBy, ...(reason ? { reason } : {}) };
+}
+
+/** After a writing job: reviews for the nodes it wrote, as its review option says ('auto': the ones the writer flagged). */
+function startReviews(tl: Timeline, job: Job, written: { id: string; reviewReason?: string }[]) {
+  if (!job.review) return 0;
+  let n = 0;
+  for (const w of written) {
+    const node = tl.nodes[w.id];
+    if (!node || node.kind !== 'event' || node.status !== 'ready') continue;
+    if (job.review === 'always') startReview(tl, node, 'always');
+    else if (w.reviewReason) startReview(tl, node, 'writer', w.reviewReason);
+    else continue;
+    n++;
+  }
+  return n;
+}
+
+function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail; review?: ReviewMode }) {
   if (parent.status !== 'ready') throw new HttpError(409, 'Node is not ready yet');
   const placeholder = makeNode({
     parentId: parent.id,
@@ -139,6 +170,7 @@ function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; 
     guidance: opts.guidance || undefined,
     temperament: lean(opts.temperament),
     detail: opts.detail === 'story' ? 'story' : undefined,
+    review: reviewOn(opts.review),
   });
   placeholder.jobId = job.id;
   return placeholder;
@@ -149,7 +181,7 @@ function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; 
 const MAX_MERGE_WITH = 4;
 
 /** Queues a convergence node whose parents are `a` (primary) and every node in `others`. */
-function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail }) {
+function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail; review?: ReviewMode }) {
   if (!others.length) throw new HttpError(400, 'Pick at least one other node to merge with');
   if (others.length > MAX_MERGE_WITH) throw new HttpError(400, `Merge at most ${MAX_MERGE_WITH + 1} nodes at once`);
   const all = [a, ...others];
@@ -181,6 +213,7 @@ function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?
     guidance: opts.guidance || undefined,
     temperament: lean(opts.temperament),
     detail: opts.detail === 'story' ? 'story' : undefined,
+    review: reviewOn(opts.review),
   });
   placeholder.jobId = job.id;
   return placeholder;
@@ -197,7 +230,7 @@ function startInfluence(
   tl: Timeline,
   source: TLNode,
   targets: TLNode[],
-  opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail; strength: Strength; followUpDepth?: number },
+  opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail; review?: ReviewMode; strength: Strength; followUpDepth?: number },
 ) {
   if (source.status !== 'ready') throw new HttpError(409, 'The influencing node is not ready yet');
   if (new Set(targets.map((t) => t.id)).size !== targets.length) throw new HttpError(400, 'Pick each node once');
@@ -229,6 +262,7 @@ function startInfluence(
       guidance: opts.guidance || undefined,
       temperament: lean(opts.temperament),
       detail: opts.detail === 'story' ? 'story' : undefined,
+      review: reviewOn(opts.review),
     });
     placeholder.jobId = job.id;
     return placeholder;
@@ -267,6 +301,7 @@ function startFollowUps(tl: Timeline, job: Job, requests: ApplyReport['followUps
         guidance: r.guidance,
         temperament: job.temperament,
         detail: job.detail,
+        review: job.review,
         followUpDepth: (job.followUpDepth ?? 0) + 1,
       });
       queued.push({ id: placeholder.id, stream: streamLabel(tl, target.id) });
@@ -440,9 +475,23 @@ app.patch(
         // Editing a node means a regenerate result would have overwritten it anyway.
         node.stale = false;
         markStaleFrom(tl, node.id);
+        // The review judged the old text.
+        cancelReviewJobs(tl.id, node.id);
+        delete node.review;
       }
       commit(tl);
     }
+    return node;
+  }),
+);
+
+app.post(
+  '/api/timelines/:id/nodes/:nodeId/review',
+  h((req) => {
+    const tl = loadTimeline(req);
+    const node = loadNode(tl, req);
+    startReview(tl, node, 'user');
+    commit(tl);
     return node;
   }),
 );
@@ -462,7 +511,11 @@ app.post(
       guidance: opts.guidance || undefined,
       temperament: lean(opts.temperament),
       detail: opts.detail === 'story' ? 'story' : undefined,
+      review: reviewOn(opts.review),
     });
+    // The rewrite replaces what any review in flight is checking.
+    cancelReviewJobs(tl.id, node.id);
+    if (node.review?.status === 'pending') delete node.review;
     node.status = 'generating';
     node.jobId = job.id;
     node.error = undefined;
@@ -489,6 +542,10 @@ app.post(
     const tl = loadTimeline(req);
     const node = loadNode(tl, req);
     cancelJobsForNodes(tl.id, new Set([node.id]));
+    if (node.review?.status === 'pending') {
+      delete node.review;
+      if (node.status === 'ready') commit(tl);
+    }
     if (node.status !== 'ready') {
       if (node.title === 'Generating...' || !node.summary) {
         delete tl.nodes[node.id]; // empty continue placeholder
@@ -523,6 +580,7 @@ app.post(
       guidance: old.guidance,
       temperament: old.temperament,
       detail: old.detail,
+      review: old.review,
     });
     node.status = 'generating';
     node.jobId = job.id;
@@ -664,6 +722,28 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
     finishJob(job, 'cancelled');
     throw new HttpError(410, 'Timeline was deleted. Discard this job and move on.');
   }
+  if (job.type === 'review') {
+    const result = parse(reviewResult, body);
+    const node = tl.nodes[job.targetNodeId];
+    // The node was rewritten (or reviewed again) since: this verdict is about content that is gone.
+    if (!node || node.review?.jobId !== job.id) {
+      finishJob(job, 'cancelled');
+      throw new HttpError(410, 'The node changed since this review was requested. Discard it and move on.');
+    }
+    node.review = {
+      ...node.review,
+      status: 'done',
+      verdict: result.verdict,
+      summary: result.summary,
+      flags: result.verdict === 'plausible' ? result.flags.slice(0, 2) : result.flags,
+      model: gen?.model ?? 'Claude Code worker',
+      at: now(),
+    };
+    finishJob(job, 'done');
+    commit(tl);
+    return { ok: true, updated: { id: node.id, title: node.title }, verdict: result.verdict, flags: result.flags.length };
+  }
+
   if (job.type !== 'regenerate') {
     const result = parse(continueResult, body);
     const placeholder = tl.nodes[job.placeholderId!];
@@ -678,9 +758,10 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
     const report = applyContinue(tl, job, result);
     stampGeneration(tl, job, report.created.map((c) => c.id), gen);
     const followUps = startFollowUps(tl, job, report.followUps);
+    const reviews = startReviews(tl, job, report.created);
     finishJob(job, 'done');
     commit(tl);
-    return { ok: true, ...report, followUps };
+    return { ok: true, ...report, followUps, reviews };
   }
 
   const result = parse(regenerateResult, body);
@@ -692,9 +773,10 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
   rejectIssues(regenerateIssues(tl, node, result));
   const report = applyRegenerate(tl, node, result);
   stampGeneration(tl, job, [node.id], gen);
+  const reviews = startReviews(tl, job, [{ id: node.id, reviewReason: result.node.requestReview }]);
   finishJob(job, 'done');
   commit(tl);
-  return { ok: true, updated: { id: node.id, title: node.title }, ...report };
+  return { ok: true, updated: { id: node.id, title: node.title }, ...report, reviews };
 }
 
 /** What the engine knows about how a result was produced; the rest of Generation is filled in here. */
@@ -728,6 +810,15 @@ function failJob(jobId: string, reason: string) {
   if (!job) throw new HttpError(404, 'Job not found');
   finishJob(job, 'failed', reason.slice(0, 1000));
   const tl = getTimeline(job.timelineId);
+  if (job.type === 'review') {
+    // A failed review leaves the node as it was; only its review shows the failure.
+    const reviewed = tl?.nodes[job.targetNodeId];
+    if (tl && reviewed?.review?.jobId === job.id) {
+      reviewed.review = { ...reviewed.review, status: 'failed', error: reason.slice(0, 500) };
+      commit(tl);
+    }
+    return;
+  }
   const node = tl?.nodes[job.placeholderId ?? job.targetNodeId];
   if (tl && node) {
     node.status = job.type === 'regenerate' ? 'ready' : 'error';

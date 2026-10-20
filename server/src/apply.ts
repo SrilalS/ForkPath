@@ -12,7 +12,8 @@ type RegenerateResult = z.infer<typeof regenerateResult>;
 type ThreadStart = z.infer<typeof threadStart>;
 
 export interface ApplyReport {
-  created: { id: string; title: string; thread?: string }[];
+  /** reviewReason: the writer asked for a plausibility review of this node (used when the review option is "auto"). */
+  created: { id: string; title: string; thread?: string; reviewReason?: string }[];
   links: number;
   /** Links the model asked for that were invalid, with the reason; the rest of the result still applies. */
   dropped: string[];
@@ -104,6 +105,8 @@ function fill(node: TLNode, c: Omit<ThreadStart, 'thread' | 'influences' | 'infl
     stale: false,
     jobId: undefined,
     error: undefined,
+    // A review judged the old content; any pending one is discarded when it comes back (job id mismatch).
+    review: undefined,
     updatedAt: ts,
   } satisfies Partial<TLNode>);
 }
@@ -143,7 +146,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
     node.likelihood = branching ? (c.likelihood ?? 0) / total : undefined;
     node.branchReason = branching ? result.branchReason : undefined;
     tl.nodes[node.id] = node;
-    report.created.push({ id: node.id, title: node.title });
+    report.created.push({ id: node.id, title: node.title, reviewReason: c.requestReview });
     pendingLinks.push([node.id, c]);
     for (const f of c.followUps ?? []) report.followUps.push({ source: node.id, ...f });
 
@@ -152,7 +155,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
       fill(start, t, ts);
       remember(start, t);
       tl.nodes[start.id] = start;
-      report.created.push({ id: start.id, title: start.title, thread: t.thread });
+      report.created.push({ id: start.id, title: start.title, thread: t.thread, reviewReason: t.requestReview });
       pendingLinks.push([start.id, t]);
     }
   });
@@ -163,7 +166,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
     fill(start, t, ts);
     remember(start, t);
     tl.nodes[start.id] = start;
-    report.created.push({ id: start.id, title: start.title, thread: t.thread });
+    report.created.push({ id: start.id, title: start.title, thread: t.thread, reviewReason: t.requestReview });
     pendingLinks.push([start.id, t]);
   }
 

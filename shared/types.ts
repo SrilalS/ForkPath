@@ -9,8 +9,9 @@
  *   4: adds parallel threads (node threadName) and timeline influence links
  *   5: adds node streamName (renames a stream from that node onward)
  *   6: adds node generation (which engine and model wrote it, tokens, cost)
+ *   7: adds node review (a plausibility check's verdict and flags)
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export type NodeKind = 'deviation' | 'event';
 export type NodeSource = 'user' | 'llm' | 'llm-edited';
@@ -73,6 +74,8 @@ export interface TLNode {
   jobId?: string;
   /** How the current content was generated (absent on user-written nodes and older files). */
   generation?: Generation;
+  /** The latest plausibility review of this node's current content (cleared when the content changes). */
+  review?: NodeReview;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -91,6 +94,43 @@ export type Temperament = (typeof TEMPERAMENTS)[number];
  */
 export const DETAILS = ['beats', 'story'] as const;
 export type Detail = (typeof DETAILS)[number];
+
+/**
+ * Plausibility reviews, chosen per request. 'off' (the default): only when the user asks. 'auto': the writer
+ * flags the nodes it is unsure of for review. 'always': every node the request writes gets one.
+ */
+export const REVIEW_MODES = ['off', 'auto', 'always'] as const;
+export type ReviewMode = (typeof REVIEW_MODES)[number];
+
+export const REVIEW_VERDICTS = ['plausible', 'questionable', 'implausible'] as const;
+export type ReviewVerdict = (typeof REVIEW_VERDICTS)[number];
+
+export const REVIEW_FLAG_KINDS = ['contradiction', 'anachronism', 'unearned', 'causality', 'scale', 'other'] as const;
+export type ReviewFlagKind = (typeof REVIEW_FLAG_KINDS)[number];
+
+export interface ReviewFlag {
+  kind: ReviewFlagKind;
+  /** What is wrong, pointing at the specific claim. */
+  text: string;
+  /** How a rewrite could fix it. */
+  fix: string;
+}
+
+export interface NodeReview {
+  status: 'pending' | 'done' | 'failed';
+  jobId: string;
+  /** Who asked: the user, the writer ('auto'), or the request's 'always' option. */
+  requestedBy: 'user' | 'writer' | 'always';
+  /** The writer's reason, when it asked. */
+  reason?: string;
+  verdict?: ReviewVerdict;
+  summary?: string;
+  flags?: ReviewFlag[];
+  error?: string;
+  /** Which model reviewed, and when it finished. */
+  model?: string;
+  at?: string;
+}
 
 /** Which engine and model wrote a node. Token and cost fields are only known for the built-in engine. */
 export interface Generation {
@@ -158,14 +198,14 @@ export interface TimelineSummary {
   updatedAt: string;
 }
 
-export type JobType = 'continue' | 'regenerate' | 'merge' | 'influence';
+export type JobType = 'continue' | 'regenerate' | 'merge' | 'influence' | 'review';
 export type JobStatus = 'pending' | 'claimed' | 'done' | 'failed' | 'cancelled';
 
 export interface Job {
   id: string;
   type: JobType;
   timelineId: string;
-  /** continue, merge, influence: the parent node. regenerate: the node being rewritten. */
+  /** continue, merge, influence: the parent node. regenerate: the node being rewritten. review: the node checked. */
   targetNodeId: string;
   /** continue: the placeholder child created while waiting. */
   placeholderId?: string;
@@ -181,6 +221,8 @@ export interface Job {
   temperament?: Temperament;
   /** Narrative format; absent means beats. */
   detail?: Detail;
+  /** Plausibility reviews for the nodes this job writes; absent means off. */
+  review?: Exclude<ReviewMode, 'off'>;
   status: JobStatus;
   createdAt: string;
   claimedAt?: string;

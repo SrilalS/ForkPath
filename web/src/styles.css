@@ -2382,3 +2382,59 @@ a.btn--ghost {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- plausibility review ------------------------------------------------ */
+
+.tl-badge--review-questionable {
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+.tl-badge--review-implausible {
+  color: var(--red);
+  background: var(--red-bg);
+}
+
+.review {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.review--questionable {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--border));
+}
+.review--implausible,
+.review--failed {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+.review__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+.review__verdict {
+  font-weight: 700;
+}
+.review__summary {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+.review__flags {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  line-height: 1.45;
+}
+.review__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}

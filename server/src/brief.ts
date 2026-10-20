@@ -54,9 +54,15 @@ function describeNode(tl: Timeline, n: TLNode, index: number, detail: Detail): s
  * A chain: the last node in full, the rest with summaries, except the first `compact` (key changes only).
  * By default everything past the last SUMMARY_DEPTH entries is compact.
  */
-function chainSection(tl: Timeline, nodes: TLNode[], offset = 0, compact = Math.max(0, nodes.length - SUMMARY_DEPTH)): string {
+function chainSection(
+  tl: Timeline,
+  nodes: TLNode[],
+  offset = 0,
+  compact = Math.max(0, nodes.length - SUMMARY_DEPTH),
+  fullDepth = FULL_NARRATIVE_DEPTH,
+): string {
   const detail = (i: number): Detail =>
-    nodes.length - i <= FULL_NARRATIVE_DEPTH ? 'full' : i < compact ? 'compact' : 'summary';
+    nodes.length - i <= fullDepth ? 'full' : i < compact ? 'compact' : 'summary';
   return [
     ...(compact > 0 ? [`(The first ${compact} entries show key changes only. ${FULL_STORY_HINT})`] : []),
     ...nodes.map((n, i) => describeNode(tl, n, i + offset, detail(i))),
@@ -327,6 +333,12 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
     ...calibrationLines(tl, shape === 'node' ? job.targetNodeId : (job.placeholderId ?? '')),
     linkHint,
     streamNameHint(tl, job, shape),
+    ...(job.review === 'auto'
+      ? [
+          'Plausibility review: the user lets you decide. Add "requestReview": "<why>" to any node you write that you are unsure holds up ' +
+            '(a contested outcome, numbers you could not ground, a big jump from the chain). Another writer then checks it. Most nodes need none.',
+        ]
+      : []),
   ];
   if (shape === 'node') return [...lines, 'Regenerate never branches: return exactly one node.'];
   lines.push(...followUpLines(job));
@@ -433,6 +445,67 @@ const STRENGTH_MEANING: Record<Strength, string> = {
 const timeSpanLine = (job: Job) =>
   `Requested time span: ${job.timeSpan?.trim() || 'not specified. Choose the span that best fits the next meaningful development.'}`;
 
+/**
+ * A REVIEW brief: the storyline up to the node (sharing the cacheable prefix with writing jobs on the same
+ * branch), the node in full, what other streams fed into it, and the checklist. No nearby events, no
+ * search: a review judges what was written, so it stays a fraction of a writing job's cost.
+ */
+/** Chain entries before the reviewed node that keep their summary (the rest show key changes, the record a review checks against). */
+const REVIEW_SUMMARY_DEPTH = 3;
+
+function reviewSections(
+  job: Job,
+  tl: Timeline,
+  mode: BriefMode,
+  storyline: (chain: TLNode[], summaries?: number, full?: number) => string,
+): string[] {
+  const node = tl.nodes[job.targetNodeId];
+  const chain = pathTo(tl, node.id).slice(0, -1);
+  const incoming = tl.links.filter((l) => l.to === node.id && tl.nodes[l.from]);
+  const outFile = `worker/out/${job.id}.json`;
+  return [
+    `# Job ${job.id}: REVIEW`,
+    `Task: check ONE event for plausibility. You do not rewrite it; you judge it and say what a rewrite should fix.`,
+    '',
+    '## Timeline up to the event (oldest first)',
+    storyline(chain, REVIEW_SUMMARY_DEPTH, 0),
+    '',
+    `## The event to review (node ${chain.length + 1})`,
+    describeNode(tl, node, chain.length, 'full'),
+    ...(incoming.length
+      ? [
+          '',
+          '## What other streams fed into it',
+          ...incoming.map((l) => {
+            const f = tl.nodes[l.from];
+            return `- ${short(f)} --${l.strength}--> this event${l.note ? `: ${l.note}` : ''}\n  ${firstSentence(f.summary)}`;
+          }),
+        ]
+      : []),
+    '',
+    '## What to check',
+    '- contradiction: it conflicts with an earlier event, its key changes, or a user edit (those are canon).',
+    '- anachronism: people, technology, institutions or terms that cannot exist at that time in this world.',
+    '- unearned: an outcome (a deal, a rescue, a collapse, a war) with no actor who had the means and motive to cause it.',
+    '- causality: it does not follow from what came before, or skips a step the story needs.',
+    '- scale: numbers, speed or reach out of proportion (casualties, money, distances, how fast things happen).',
+    'Judge by this world\'s history above, real-world constraints and what comparable real situations did. ' +
+      'Flag only real problems, most serious first; style, tone and taste are not problems. A surprising outcome with a clear cause is plausible.',
+    '',
+    '## Your response',
+    mode === 'api'
+      ? 'Reply with ONLY one JSON object of this shape: no other text, no code fences.'
+      : `Write JSON to \`${outFile}\` with this shape, then run \`node worker/submit.mjs ${job.id}\`:`,
+    '```json',
+    '{ "verdict": "plausible", "summary": "", "flags": [ { "kind": "unearned", "text": "", "fix": "" } ] }',
+    '```',
+    '- verdict: "plausible" (no real problem; flags may be empty, or at most 2 minor notes), "questionable" (real problems a rewrite should fix), ' +
+      '"implausible" (the core of the event does not hold up).',
+    '- summary: 1-2 sentences, the overall judgment. flags: at most 5, each pointing at the specific claim ("text") and how to fix it ("fix").',
+    '- kind: contradiction | anachronism | unearned | causality | scale | other.',
+  ];
+}
+
 export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): string {
   const { prefix, body } = buildBriefParts(job, tl, mode);
   return prefix ? `${prefix}\n\n---\n\n${body}` : body;
@@ -447,13 +520,17 @@ export function buildBriefParts(job: Job, tl: Timeline, mode: BriefMode = 'worke
   const parts: string[] = [];
   let prefix = '';
   /** The primary storyline: its oldest nodes go into the prefix, the rest stay here (numbered on). */
-  const storyline = (chain: TLNode[]) => {
+  /**
+   * `summaries` and `full`: how many of the last nodes show their summary, and their full narrative. A writer
+   * needs the defaults; a review (which checks one node against the record) needs less.
+   */
+  const storyline = (chain: TLNode[], summaries = SUMMARY_DEPTH, full = FULL_NARRATIVE_DEPTH) => {
     const k = archiveSize(chain.length);
     if (k) prefix = archiveSection(tl, chain.slice(0, k));
     return [
       ...(k ? [`(Entries 1-${k} are in "Earlier history" above.)`, ''] : []),
-      // Same detail as without a prefix: nodes between the archive and the last SUMMARY_DEPTH stay compact.
-      chainSection(tl, chain.slice(k), k, Math.max(0, chain.length - SUMMARY_DEPTH - k)),
+      // Same detail as without a prefix: nodes between the archive and the last `summaries` stay compact.
+      chainSection(tl, chain.slice(k), k, Math.max(0, chain.length - summaries - k), full),
     ].join('\n');
   };
 
@@ -565,6 +642,8 @@ export function buildBriefParts(job: Job, tl: Timeline, mode: BriefMode = 'worke
       ),
       ...responseSection(job, tl, 'children', mode),
     );
+  } else if (job.type === 'review') {
+    parts.push(...reviewSections(job, tl, mode, storyline));
   } else {
     const target = tl.nodes[job.targetNodeId];
     const chain = pathTo(tl, job.targetNodeId).slice(0, -1);

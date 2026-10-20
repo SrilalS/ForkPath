@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Detail, Generation, Temperament, Timeline, TLNode } from '../../../shared/types.ts';
+import type { Detail, Generation, NodeReview, ReviewFlag, ReviewMode, ReviewVerdict, Temperament, Timeline, TLNode } from '../../../shared/types.ts';
 import { api, type GenerateOptions } from '../api.ts';
-import { DETAIL_INFO, DetailField, GenerateOptionsFields, TEMPERAMENT_INFO, TemperamentField } from './forms.tsx';
+import { DETAIL_INFO, DetailField, GenerateOptionsFields, ReviewField, TEMPERAMENT_INFO, TemperamentField } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
 import { WorldIndex } from '../../../shared/world.ts';
@@ -59,6 +59,12 @@ export function NodePanel({
   onError,
 }: Props) {
   const [mode, setMode] = useState<Mode>('view');
+  /** What the Regenerate form starts with: empty, or a review's fixes ("Fix with Regenerate"). */
+  const [regenGuidance, setRegenGuidance] = useState('');
+  const openRegenerate = (guidance: string) => {
+    setRegenGuidance(guidance);
+    setMode('regenerate');
+  };
   const [busy, setBusy] = useState(false);
   const [resizing, setResizing] = useState(false);
   const isRoot = node.id === timeline.rootId;
@@ -236,7 +242,7 @@ export function NodePanel({
                 </div>
                 <div className="banner__actions">
                   {node.kind === 'event' && (
-                    <button className="btn btn--small btn--primary" disabled={busy} onClick={() => setMode('regenerate')}>
+                    <button className="btn btn--small btn--primary" disabled={busy} onClick={() => openRegenerate('')}>
                       Regenerate
                     </button>
                   )}
@@ -351,6 +357,15 @@ export function NodePanel({
               ))}
             </section>
 
+            {node.review && (
+              <ReviewSection
+                review={node.review}
+                busy={busy}
+                onFix={() => openRegenerate(fixGuidance(node.review!))}
+                onCancel={() => run(() => api.cancel(timeline.id, node.id))}
+              />
+            )}
+
             {node.generation && <GenerationLine g={node.generation} edited={node.source === 'llm-edited'} />}
           </>
         )}
@@ -360,9 +375,10 @@ export function NodePanel({
         <RegenerateForm
           busy={busy}
           stale={node.stale}
+          initialGuidance={regenGuidance}
           onCancel={() => setMode('view')}
-          onSubmit={async (guidance, temperament, detail) => {
-            const ok = await run(() => api.regenerate(timeline.id, node.id, { guidance, temperament, detail }));
+          onSubmit={async (guidance, temperament, detail, review) => {
+            const ok = await run(() => api.regenerate(timeline.id, node.id, { guidance, temperament, detail, review }));
             if (ok) setMode('view');
           }}
         />
@@ -412,8 +428,18 @@ export function NodePanel({
             Edit
           </button>
           {node.kind === 'event' && (
-            <button className="btn btn--ghost" disabled={busy} onClick={() => setMode('regenerate')} title="Rewrite this node">
+            <button className="btn btn--ghost" disabled={busy} onClick={() => openRegenerate('')} title="Rewrite this node">
               Regenerate
+            </button>
+          )}
+          {node.kind === 'event' && (
+            <button
+              className="btn btn--ghost"
+              disabled={busy || node.review?.status === 'pending'}
+              onClick={() => run(() => api.review(timeline.id, node.id))}
+              title="Have another writer check this event for contradictions, anachronisms and unearned outcomes (about a third of a writing job)"
+            >
+              {node.review?.status === 'done' ? 'Review again' : 'Review'}
             </button>
           )}
           <a
@@ -442,26 +468,115 @@ export function NodePanel({
   );
 }
 
+const VERDICT_INFO: Record<ReviewVerdict, { icon: string; label: string }> = {
+  plausible: { icon: '✅', label: 'Plausible' },
+  questionable: { icon: '⚠️', label: 'Questionable' },
+  implausible: { icon: '⛔', label: 'Implausible' },
+};
+
+const FLAG_LABEL: Record<ReviewFlag['kind'], string> = {
+  contradiction: 'Contradiction',
+  anachronism: 'Anachronism',
+  unearned: 'Unearned outcome',
+  causality: 'Causality gap',
+  scale: 'Out of scale',
+  other: 'Other',
+};
+
+const REQUESTED_BY: Record<NodeReview['requestedBy'], string> = {
+  user: 'you asked',
+  writer: 'the writer asked',
+  always: 'review on every event',
+};
+
+/** Regenerate guidance from a review's flags: the fixes, within the 1000-character guidance limit. */
+function fixGuidance(r: NodeReview): string {
+  const lines = (r.flags ?? []).map((f) => `- ${f.fix}`);
+  const text = ['Fix these plausibility problems:', ...lines].join('\n');
+  return text.length > 1000 ? `${text.slice(0, 997)}...` : text;
+}
+
+function ReviewSection({ review, busy, onFix, onCancel }: { review: NodeReview; busy: boolean; onFix: () => void; onCancel: () => void }) {
+  if (review.status === 'pending') {
+    return (
+      <section className="review review--pending">
+        <div className="review__head">
+          <span>🔍 Plausibility review in progress</span>
+          <button className="btn btn--small btn--ghost" disabled={busy} onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+        {review.reason && <p className="muted small">Writer's reason: {review.reason}</p>}
+      </section>
+    );
+  }
+  if (review.status === 'failed') {
+    return (
+      <section className="review review--failed">
+        <div className="review__head">❌ The review failed</div>
+        {review.error && <p className="muted small">{review.error}</p>}
+      </section>
+    );
+  }
+  const v = VERDICT_INFO[review.verdict ?? 'plausible'];
+  const flags = review.flags ?? [];
+  return (
+    <section className={`review review--${review.verdict}`}>
+      <div className="review__head">
+        <span className="review__verdict">
+          {v.icon} {v.label}
+        </span>
+        <span className="muted small">Plausibility review</span>
+      </div>
+      {review.summary && <p className="review__summary">{review.summary}</p>}
+      {flags.length > 0 && (
+        <ul className="review__flags">
+          {flags.map((f, i) => (
+            <li key={i}>
+              <strong>{FLAG_LABEL[f.kind]}:</strong> {f.text}
+              <div className="muted small">Fix: {f.fix}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="review__foot">
+        <span className="muted small">
+          {[review.model, REQUESTED_BY[review.requestedBy]].filter(Boolean).join(' · ')}
+          {review.reason ? `: ${review.reason}` : ''}
+        </span>
+        {flags.length > 0 && review.verdict !== 'plausible' && (
+          <button className="btn btn--small btn--primary" disabled={busy} onClick={onFix} title="Open Regenerate with these fixes as guidance">
+            Fix with Regenerate
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function RegenerateForm({
   busy,
   stale,
+  initialGuidance,
   onCancel,
   onSubmit,
 }: {
   busy: boolean;
   stale: boolean;
+  initialGuidance: string;
   onCancel: () => void;
-  onSubmit: (guidance: string, temperament: Temperament, detail: Detail) => void;
+  onSubmit: (guidance: string, temperament: Temperament, detail: Detail, review: ReviewMode) => void;
 }) {
-  const [guidance, setGuidance] = useState('');
+  const [guidance, setGuidance] = useState(initialGuidance);
   const [temperament, setTemperament] = useState<Temperament>('realist');
   const [detail, setDetail] = useState<Detail>('beats');
+  const [review, setReview] = useState<ReviewMode>('off');
   return (
     <form
       className="panel__continue form"
       onSubmit={(e) => {
         e.preventDefault();
-        onSubmit(guidance.trim(), temperament, detail);
+        onSubmit(guidance.trim(), temperament, detail, review);
       }}
     >
       <h3>Regenerate this node</h3>
@@ -482,12 +597,13 @@ function RegenerateForm({
           value={guidance}
           onChange={(e) => setGuidance(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(guidance.trim(), temperament, detail);
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(guidance.trim(), temperament, detail, review);
           }}
         />
       </label>
       <TemperamentField value={temperament} onChange={setTemperament} />
       <DetailField value={detail} onChange={setDetail} />
+      <ReviewField value={review} onChange={setReview} />
       <div className="form__actions">
         <button type="button" className="btn btn--ghost" onClick={onCancel}>
           Cancel
