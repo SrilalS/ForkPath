@@ -140,12 +140,20 @@ export interface Job {
   status: JobStatus;
   createdAt: string;
   claimedAt?: string;
+  /** Which engine holds the claim: the external worker or the built-in runner. */
+  claimedBy?: 'external' | 'builtin';
   finishedAt?: string;
   error?: string;
 }
 
 export interface WorkerStatus {
+  /** The engine that generates jobs: the external worker session, or the server's built-in runner. */
+  engine: 'external' | 'builtin';
   online: boolean;
+  /** Built-in only: provider and model, e.g. "claude-sonnet-4-6 via Anthropic". */
+  label?: string;
+  /** Built-in only: why it cannot run (missing key or model). */
+  problem?: string;
   lastSeenAt: string | null;
   pending: number;
   claimed: number;

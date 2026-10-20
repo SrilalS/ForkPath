@@ -31,6 +31,8 @@ import {
 } from './jobs.ts';
 import { buildBrief } from './brief.ts';
 import { searchForJob, showNode } from './search.ts';
+import { publicConfig, updateConfig } from './config.ts';
+import { startRunner } from './runner.ts';
 import {
   addLink,
   applyContinue,
@@ -45,6 +47,7 @@ import {
 import {
   continueResult,
   deviationInput,
+  enginePatch,
   formatIssues,
   generateOptions,
   influenceInput,
@@ -608,48 +611,70 @@ function rejectChronology(issues: string[]) {
   if (issues.length) throw new HttpError(400, `Chronology:\n${issues.map((i) => `- ${i}`).join('\n')}`);
 }
 
+/**
+ * Validates and applies a job result: what submit.mjs posts for the external worker, and what the built-in
+ * runner passes in directly. Throws HttpError: 400 = invalid (fix and resubmit), 410 = discard.
+ */
+function submitResult(jobId: string, body: unknown) {
+  const job = getJob(jobId);
+  if (!job) throw new HttpError(404, 'Job not found');
+  if (job.status === 'cancelled') throw new HttpError(410, 'Job was cancelled by the user. Discard it and move on.');
+  if (job.status === 'done') throw new HttpError(409, 'Job already completed');
+  const tl = getTimeline(job.timelineId);
+  if (!tl) {
+    finishJob(job, 'cancelled');
+    throw new HttpError(410, 'Timeline was deleted. Discard this job and move on.');
+  }
+  if (job.type !== 'regenerate') {
+    const result = parse(continueResult, body);
+    const placeholder = tl.nodes[job.placeholderId!];
+    const parent = tl.nodes[job.targetNodeId];
+    const mergeParents = job.type === 'merge' ? (job.mergeWith ?? []).filter((id) => tl.nodes[id]) : undefined;
+    const sourceGone = job.type === 'influence' && !tl.nodes[job.influenceFrom ?? ''];
+    if (!placeholder || !parent || (mergeParents && !mergeParents.length) || sourceGone) {
+      finishJob(job, 'cancelled');
+      throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
+    }
+    rejectChronology(continueChronology(tl, job, result));
+    const report = applyContinue(tl, job, result);
+    const followUps = startFollowUps(tl, job, report.followUps);
+    finishJob(job, 'done');
+    commit(tl);
+    return { ok: true, ...report, followUps };
+  }
+
+  const result = parse(regenerateResult, body);
+  const node = tl.nodes[job.targetNodeId];
+  if (!node) {
+    finishJob(job, 'cancelled');
+    throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
+  }
+  rejectChronology(chronologyIssues(tl, [result.node], parentIdsOf(node)));
+  const report = applyRegenerate(tl, node, result);
+  finishJob(job, 'done');
+  commit(tl);
+  return { ok: true, updated: { id: node.id, title: node.title }, ...report };
+}
+
+/** Marks a job failed. Its placeholder shows the reason and can be retried; a regenerate keeps the old content. */
+function failJob(jobId: string, reason: string) {
+  const job = getJob(jobId);
+  if (!job) throw new HttpError(404, 'Job not found');
+  finishJob(job, 'failed', reason.slice(0, 1000));
+  const tl = getTimeline(job.timelineId);
+  const node = tl?.nodes[job.placeholderId ?? job.targetNodeId];
+  if (tl && node) {
+    node.status = job.type === 'regenerate' ? 'ready' : 'error';
+    node.error = reason.slice(0, 1000);
+    commit(tl);
+  }
+}
+
 app.post(
   '/api/worker/jobs/:jobId/result',
   h((req) => {
     touchWorker();
-    const job = getJob(String(req.params.jobId));
-    if (!job) throw new HttpError(404, 'Job not found');
-    if (job.status === 'cancelled') throw new HttpError(410, 'Job was cancelled by the user. Discard it and move on.');
-    if (job.status === 'done') throw new HttpError(409, 'Job already completed');
-    const tl = getTimeline(job.timelineId);
-    if (!tl) {
-      finishJob(job, 'cancelled');
-      throw new HttpError(410, 'Timeline was deleted. Discard this job and move on.');
-    }
-    if (job.type !== 'regenerate') {
-      const result = parse(continueResult, req.body);
-      const placeholder = tl.nodes[job.placeholderId!];
-      const parent = tl.nodes[job.targetNodeId];
-      const mergeParents = job.type === 'merge' ? (job.mergeWith ?? []).filter((id) => tl.nodes[id]) : undefined;
-      const sourceGone = job.type === 'influence' && !tl.nodes[job.influenceFrom ?? ''];
-      if (!placeholder || !parent || (mergeParents && !mergeParents.length) || sourceGone) {
-        finishJob(job, 'cancelled');
-        throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
-      }
-      rejectChronology(continueChronology(tl, job, result));
-      const report = applyContinue(tl, job, result);
-      const followUps = startFollowUps(tl, job, report.followUps);
-      finishJob(job, 'done');
-      commit(tl);
-      return { ok: true, ...report, followUps };
-    }
-
-    const result = parse(regenerateResult, req.body);
-    const node = tl.nodes[job.targetNodeId];
-    if (!node) {
-      finishJob(job, 'cancelled');
-      throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
-    }
-    rejectChronology(chronologyIssues(tl, [result.node], parentIdsOf(node)));
-    const report = applyRegenerate(tl, node, result);
-    finishJob(job, 'done');
-    commit(tl);
-    return { ok: true, updated: { id: node.id, title: node.title }, ...report };
+    return submitResult(String(req.params.jobId), req.body);
   }),
 );
 
@@ -657,18 +682,7 @@ app.post(
   '/api/worker/jobs/:jobId/fail',
   h((req) => {
     touchWorker();
-    const job = getJob(String(req.params.jobId));
-    if (!job) throw new HttpError(404, 'Job not found');
-    const reason = String(req.body?.error ?? 'Worker reported failure').slice(0, 1000);
-    finishJob(job, 'failed', reason);
-    const tl = getTimeline(job.timelineId);
-    const node = tl?.nodes[job.placeholderId ?? job.targetNodeId];
-    if (tl && node) {
-      // A failed continue leaves an error placeholder (retryable); a failed regenerate keeps the old content.
-      node.status = job.type === 'continue' ? 'error' : 'ready';
-      node.error = reason;
-      commit(tl);
-    }
+    failJob(String(req.params.jobId), String(req.body?.error ?? 'Worker reported failure'));
   }),
 );
 
@@ -688,6 +702,24 @@ if (fs.existsSync(dist)) {
   app.use(express.static(dist));
   app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
+
+// ---- engine config and the built-in runner ---------------------------------
+
+app.get('/api/engine', h(() => publicConfig()));
+
+app.put(
+  '/api/engine',
+  h((req) => {
+    const body = parse(enginePatch, req.body);
+    updateConfig(body);
+    return publicConfig();
+  }),
+);
+
+startRunner({
+  submit: (jobId, body) => submitResult(jobId, body),
+  fail: (jobId, reason) => failJob(jobId, reason),
+});
 
 app.listen(PORT, () => {
   console.log(`[althistory] API on http://localhost:${PORT}`);

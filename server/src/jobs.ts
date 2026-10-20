@@ -3,6 +3,10 @@ import path from 'node:path';
 import type { Job, WorkerStatus } from '../../shared/types.ts';
 import { DATA_DIR, newId, now, writeJsonAtomic } from './store.ts';
 import { broadcast } from './events.ts';
+import { getConfig, onConfigChange } from './config.ts';
+
+/** Only the active engine is handed jobs; the other one gets NO_JOB. */
+const activeEngine = () => getConfig().engine;
 
 const JOBS_FILE = path.join(DATA_DIR, 'jobs.json');
 /** A claimed job with no result after this long goes back to pending (worker crashed or lost it). */
@@ -13,7 +17,15 @@ const KEEP_FINISHED = 200;
 
 const jobs = new Map<string, Job>();
 try {
-  for (const job of JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8')) as Job[]) jobs.set(job.id, job);
+  for (const job of JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8')) as Job[]) {
+    // The built-in runner lives in this process, so its claims died with the last run: queue them again now.
+    if (job.status === 'claimed' && job.claimedBy === 'builtin') {
+      job.status = 'pending';
+      job.claimedAt = undefined;
+      job.claimedBy = undefined;
+    }
+    jobs.set(job.id, job);
+  }
 } catch {
   // first run
 }
@@ -33,17 +45,30 @@ function persist() {
 
 let activePolls = 0;
 let lastSeenAt: string | null = null;
-let lastBroadcastOnline: boolean | null = null;
+let lastBroadcast = '';
+
+/** Set by the built-in runner: whether it can run, and how to describe it. */
+let builtin: { ready: boolean; label: string; problem: string | null } = { ready: false, label: '', problem: null };
+
+export function setBuiltinStatus(s: typeof builtin) {
+  builtin = s;
+  broadcastStatus();
+}
 
 export function workerStatus(): WorkerStatus {
   const all = [...jobs.values()];
-  const recentlySeen = lastSeenAt !== null && Date.now() - Date.parse(lastSeenAt) < ONLINE_GRACE_MS;
   const claimed = all.filter((j) => j.status === 'claimed').length;
+  const pending = all.filter((j) => j.status === 'pending').length;
+  if (activeEngine() === 'builtin') {
+    return { engine: 'builtin', online: builtin.ready, lastSeenAt, pending, claimed, label: builtin.label, problem: builtin.problem ?? undefined };
+  }
+  const recentlySeen = lastSeenAt !== null && Date.now() - Date.parse(lastSeenAt) < ONLINE_GRACE_MS;
   return {
+    engine: 'external',
     // A claimed job means the worker is busy writing, even though it is not polling.
     online: activePolls > 0 || recentlySeen || claimed > 0,
     lastSeenAt,
-    pending: all.filter((j) => j.status === 'pending').length,
+    pending,
     claimed,
   };
 }
@@ -54,9 +79,27 @@ export function touchWorker() {
 
 function broadcastStatus() {
   const status = workerStatus();
-  lastBroadcastOnline = status.online;
+  lastBroadcast = JSON.stringify({ ...status, lastSeenAt: null });
   broadcast({ type: 'worker', status });
 }
+
+/** Called when the queue changes (new, cancelled or released jobs), so the built-in runner can react. */
+const queueListeners = new Set<() => void>();
+export function onQueueChange(fn: () => void) {
+  queueListeners.add(fn);
+  return () => queueListeners.delete(fn);
+}
+const queueChanged = () => {
+  for (const fn of queueListeners) fn();
+};
+
+onConfigChange(() => {
+  // Switching to the external worker lets a waiting poll pick up queued jobs right away; switching away
+  // leaves its polls waiting until they time out with NO_JOB (a quick NO_JOB would make it spin).
+  wakeWaiter();
+  queueChanged();
+  broadcastStatus();
+});
 
 setInterval(() => {
   // Requeue abandoned claims.
@@ -71,8 +114,9 @@ setInterval(() => {
   if (changed) {
     persist();
     wakeWaiter();
+    queueChanged();
   }
-  if (changed || workerStatus().online !== lastBroadcastOnline) broadcastStatus();
+  if (changed || JSON.stringify({ ...workerStatus(), lastSeenAt: null }) !== lastBroadcast) broadcastStatus();
 }, 5_000).unref();
 
 // ---- queue -----------------------------------------------------------------
@@ -98,6 +142,7 @@ export function enqueue(input: Omit<Job, 'id' | 'status' | 'createdAt'>): Job {
   jobs.set(job.id, job);
   persist();
   wakeWaiter();
+  queueChanged();
   broadcastStatus();
   return job;
 }
@@ -108,27 +153,52 @@ function oldestPending(): Job | undefined {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
 }
 
-function claim(job: Job): Job {
+function claim(job: Job, by: NonNullable<Job['claimedBy']>): Job {
   job.status = 'claimed';
   job.claimedAt = now();
+  job.claimedBy = by;
   persist();
   broadcastStatus();
   return job;
 }
 
 function wakeWaiter() {
+  if (activeEngine() !== 'external') return;
   while (waiters.length) {
     const job = oldestPending();
     if (!job) return;
-    waiters.shift()!(claim(job));
+    waiters.shift()!(claim(job, 'external'));
   }
 }
 
-/** Long-poll: resolves with a claimed job, or null after waitMs. */
+/** The built-in runner's claim: the oldest pending job, or undefined (also when the runner is not active). */
+export function claimForBuiltin(): Job | undefined {
+  if (activeEngine() !== 'builtin') return undefined;
+  const job = oldestPending();
+  return job && claim(job, 'builtin');
+}
+
+/** Puts a claimed job back in the queue (the runner stopped before finishing it). */
+export function releaseJob(job: Job) {
+  if (job.status !== 'claimed') return;
+  job.status = 'pending';
+  job.claimedAt = undefined;
+  job.claimedBy = undefined;
+  persist();
+  wakeWaiter();
+  queueChanged();
+  broadcastStatus();
+}
+
+/**
+ * Long-poll for the external worker: resolves with a claimed job, or null after waitMs. While the built-in
+ * runner is the active engine nothing is handed out, but the poll still waits its full time so the worker
+ * does not spin on instant NO_JOBs.
+ */
 export function nextJob(waitMs: number, onAbort: (cancel: () => void) => void): Promise<Job | null> {
   touchWorker();
-  const ready = oldestPending();
-  if (ready) return Promise.resolve(claim(ready));
+  const ready = activeEngine() === 'external' ? oldestPending() : undefined;
+  if (ready) return Promise.resolve(claim(ready, 'external'));
   if (waitMs <= 0) return Promise.resolve(null);
 
   activePolls++;
@@ -161,6 +231,7 @@ export function finishJob(job: Job, status: 'done' | 'failed' | 'cancelled', err
   job.finishedAt = now();
   if (error) job.error = error;
   persist();
+  queueChanged();
   broadcastStatus();
 }
 
@@ -181,6 +252,7 @@ export function cancelJobsForNodes(timelineId: string, nodeIds: Set<string>) {
   }
   if (changed) {
     persist();
+    queueChanged();
     broadcastStatus();
   }
 }
@@ -193,5 +265,6 @@ export function cancelJobsForTimeline(timelineId: string) {
     }
   }
   persist();
+  queueChanged();
   broadcastStatus();
 }

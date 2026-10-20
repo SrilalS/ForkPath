@@ -44,6 +44,45 @@ starts with a clean context, so the dispatcher stays small and up to 3 jobs run 
 `.claude/settings.json` pre-approves the worker commands (next, submit, search) and writes to `worker/out/`, so the worker session
 does not stop for permission prompts.
 
+## Engines: Claude Code worker or a model API
+
+Jobs go to exactly one **engine**, set in `data/config.json` (gitignored, may hold an API key; edits apply
+without a restart). The other engine gets `NO_JOB`.
+
+| Engine | What runs the model | Set up |
+|---|---|---|
+| `external` (default) | The Claude Code worker session above | Start the worker session |
+| `builtin` | This server calls a model API directly, up to `concurrency` jobs at once | Fill in `builtin` below |
+
+```json
+{
+  "engine": "builtin",
+  "builtin": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "apiKey": "sk-...",
+    "concurrency": 3
+  }
+}
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `provider` | `anthropic` | `anthropic` (Messages API) or `openai-compatible` (Chat Completions: OpenAI, Gemini's `/v1beta/openai`, OpenRouter, Groq, DeepSeek, Mistral, Ollama, LM Studio, vLLM) |
+| `model` | (required) | The provider's model id |
+| `baseUrl` | `https://api.anthropic.com/v1` / `https://api.openai.com/v1` | e.g. `http://localhost:1234/v1` for LM Studio, `http://localhost:11434/v1` for Ollama |
+| `apiKey` / `apiKeyEnv` | env `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Local servers on localhost may need none |
+| `concurrency` | 3 | Jobs generated at once |
+| `maxOutputTokens` | 8000 | Thinking models spend part of this on hidden reasoning |
+| `maxToolCalls` | 4 | Searches per job |
+| `maxRepairs` | 2 | Invalid results sent back for fixing before the job fails |
+| `timeoutMs` | 300000 | Per request; raise it for slow local models |
+
+`GET /api/engine` shows the active config (never the key); `PUT /api/engine` changes it. The built-in runner
+uses the same briefs, validation, follow-ups and writer instructions (`.claude/agents/althistory-writer.md`)
+as the worker, through plain `fetch` adapters in `server/src/llm/` (no SDKs). `npm test` runs their contract
+tests against a fake server.
+
 ## Using it
 
 | Action | How |
@@ -99,6 +138,10 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `web/src/mood.ts` | Tone colors and the mood-theme rules |
 | `web/src/` | React UI (React Flow canvas, dagre layout, side panel) |
 | `shared/types.ts` | Types used by both sides |
+| `server/src/runner.ts` | The built-in engine: claims jobs, calls the provider, repairs invalid results |
+| `server/src/llm/` | Provider adapters on plain `fetch`: `anthropic.ts`, `openai.ts` (OpenAI-compatible) |
+| `server/src/config.ts` | Engine config (`data/config.json`) |
+| `server/test/` | Contract tests for the adapters (`npm test`) |
 | `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job, fallback |
 | `.claude/agents/althistory-writer.md` | The writer subagent: writing rules, when to branch, links, JSON shapes |
 | `worker/next.mjs`, `worker/submit.mjs` | The worker's job loop commands |

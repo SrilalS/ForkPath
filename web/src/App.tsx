@@ -704,7 +704,26 @@ function Sidebar({
   const online = worker?.online ?? false;
   const fileInput = useRef<HTMLInputElement>(null);
   const queued = (worker?.pending ?? 0) + (worker?.claimed ?? 0);
-  const workerTitle = !connected ? 'Backend offline' : online ? 'Worker online' : 'Worker offline';
+  const builtin = worker?.engine === 'builtin';
+  const workerTitle = !connected
+    ? 'Backend offline'
+    : builtin
+      ? online
+        ? 'Built-in model ready'
+        : 'Built-in model not ready'
+      : online
+        ? 'Worker online'
+        : 'Worker offline';
+  const workerDetail = !connected
+    ? 'Start it with npm run dev.'
+    : builtin && !online
+      ? (worker?.problem ?? 'Check data/config.json.')
+      : [
+          builtin ? worker?.label : null,
+          queued ? `${queued} job${queued > 1 ? 's' : ''} in queue` : online ? 'Ready for the next request.' : 'Start the Claude worker session to generate nodes.',
+        ]
+          .filter(Boolean)
+          .join(' · ');
   const nav = (
     <div className="sidebar__nav">
       {(
@@ -801,9 +820,8 @@ function Sidebar({
           onDelete={onDelete}
           nav={nav}
           online={online}
-          connected={connected}
-          queued={queued}
           workerTitle={workerTitle}
+          workerDetail={workerDetail}
         />
       )}
     </nav>
@@ -817,9 +835,8 @@ function SidebarBody({
   onDelete,
   nav,
   online,
-  connected,
-  queued,
   workerTitle,
+  workerDetail,
 }: {
   timelines: TimelineSummary[];
   activeId: string | null;
@@ -827,9 +844,8 @@ function SidebarBody({
   onDelete: (t: TimelineSummary) => void;
   nav: React.ReactNode;
   online: boolean;
-  connected: boolean;
-  queued: number;
   workerTitle: string;
+  workerDetail: string;
 }) {
   return (
     <>
@@ -863,15 +879,7 @@ function SidebarBody({
           <span className={`dot ${online ? 'dot--on' : 'dot--off'} ${online ? 'dot--pulse' : ''}`} />
           <strong>{workerTitle}</strong>
         </div>
-        <div className="muted small">
-          {!connected
-            ? 'Start it with npm run dev.'
-            : queued
-              ? `${queued} job${queued > 1 ? 's' : ''} in queue`
-              : online
-                ? 'Ready for the next request.'
-                : 'Start the Claude worker session to generate nodes.'}
-        </div>
+        <div className="muted small">{workerDetail}</div>
       </div>
     </>
   );

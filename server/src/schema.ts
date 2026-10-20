@@ -145,6 +145,25 @@ export const influenceInput = generateOptions.extend({
   strength: z.enum(STRENGTHS).default('moderate'),
 });
 
+/** PUT /api/engine: switch engine and/or change built-in settings. apiKey '' removes a stored key. */
+export const enginePatch = z.object({
+  engine: z.enum(['external', 'builtin']).optional(),
+  builtin: z
+    .object({
+      provider: z.enum(['anthropic', 'openai-compatible']).optional(),
+      model: z.string().trim().max(200).optional(),
+      baseUrl: z.string().trim().max(500).optional(),
+      apiKey: z.string().trim().max(500).optional(),
+      apiKeyEnv: z.string().trim().max(100).optional(),
+      concurrency: z.number().int().min(1).max(8).optional(),
+      maxOutputTokens: z.number().int().min(1000).max(64000).optional(),
+      maxToolCalls: z.number().int().min(0).max(10).optional(),
+      maxRepairs: z.number().int().min(0).max(5).optional(),
+      timeoutMs: z.number().int().min(10_000).max(900_000).optional(),
+    })
+    .optional(),
+});
+
 export function formatIssues(err: z.ZodError): string {
   return err.issues.map((i) => `- ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n');
 }

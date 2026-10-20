@@ -206,7 +206,36 @@ export function calibrationLines(tl: Timeline, exclude: string): string[] {
   return [`Significance so far in this timeline (${rated.length} events): ${mix.join(', ')}.`, advice];
 }
 
-function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): string[] {
+/**
+ * Who reads the brief: the external worker (runs worker/*.mjs commands, writes a file) or a model called by
+ * the built-in runner (calls tools, replies with the JSON). Everything else in the brief is identical.
+ */
+export type BriefMode = 'worker' | 'api';
+
+/** Tool names the built-in runner offers; the API-mode brief refers to them. */
+export const API_TOOLS = { search: 'search_events', show: 'show_event' } as const;
+
+function searchSection(job: Job, mode: BriefMode): string[] {
+  const intro =
+    'If an older or unlisted event in another stream may shape this node (a person, program, treaty or war that comes back), search for it';
+  const tail = `Results older than ${INFLUENCE_WINDOW_YEARS} years show only their key changes. Every id a search returns can be linked.`;
+  if (mode === 'api') {
+    return [
+      '',
+      '## Finding other events (optional, at most 3 searches)',
+      `${intro} with the \`${API_TOOLS.search}\` tool (keywords, optional before / after years). ` +
+        `\`${API_TOOLS.show}\` returns one event in full. ${tail}`,
+    ];
+  }
+  return [
+    '',
+    '## Finding other events (optional, at most 3 searches)',
+    `${intro}: \`node worker/search.mjs ${job.id} "<keywords>"\` (add \`--before <year>\` / \`--after <year>\` to narrow by start year). ` +
+      `\`node worker/search.mjs ${job.id} --node <id>\` prints one event in full. ${tail}`,
+  ];
+}
+
+function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mode: BriefMode): string[] {
   const outFile = `worker/out/${job.id}.json`;
   const linkHint =
     'Optional on any node you write: "influences" / "influencedBy": [ { "node": "<existing id or @key>", "strength": "mild", "note": "" } ]. ' +
@@ -219,15 +248,12 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
         ? `{ "children": [ { ${node}, "likelihood": 1, "influences": [], "influencedBy": [], "spawnThreads": [] } ], "branchReason": "", "threads": [] }`
         : `{ "node": { ${node}, "influences": [], "influencedBy": [] } }`;
   const lines = [
-    '',
-    '## Finding other events (optional, at most 3 searches)',
-    `If an older or unlisted event in another stream may shape this node (a person, program, treaty or war that comes back), search for it: ` +
-      `\`node worker/search.mjs ${job.id} "<keywords>"\` (add \`--before <year>\` / \`--after <year>\` to narrow by start year). ` +
-      `Results older than ${INFLUENCE_WINDOW_YEARS} years show only their key changes; \`node worker/search.mjs ${job.id} --node <id>\` prints one event in full. ` +
-      'Every id a search returns can be linked.',
+    ...searchSection(job, mode),
     '',
     '## Your response',
-    `Write JSON to \`${outFile}\` with this shape, then run \`node worker/submit.mjs ${job.id}\`:`,
+    mode === 'api'
+      ? 'Reply with ONLY one JSON object of this shape: no other text, no code fences.'
+      : `Write JSON to \`${outFile}\` with this shape, then run \`node worker/submit.mjs ${job.id}\`:`,
     '```json',
     example,
     '```',
@@ -292,7 +318,7 @@ const STRENGTH_MEANING: Record<Strength, string> = {
 const timeSpanLine = (job: Job) =>
   `Requested time span: ${job.timeSpan?.trim() || 'not specified. Choose the span that best fits the next meaningful development.'}`;
 
-export function buildBrief(job: Job, tl: Timeline): string {
+export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): string {
   const parts: string[] = [];
 
   if (job.type === 'continue') {
@@ -323,7 +349,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
       '',
       `You are writing in stream "${streamLabel(tl, target.id)}".`,
       ...threadContext(tl, chain, target, new Set([job.placeholderId ?? ''])),
-      ...responseSection(job, tl, 'children'),
+      ...responseSection(job, tl, 'children', mode),
     );
   } else if (job.type === 'merge') {
     const chain = pathTo(tl, job.targetNodeId);
@@ -348,7 +374,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
         new Set([job.placeholderId ?? '', ...others.flatMap((id) => pathTo(tl, id).map((n) => n.id))]),
         latestStart(tl, [job.targetNodeId, ...others]),
       ),
-      ...responseSection(job, tl, 'children'),
+      ...responseSection(job, tl, 'children', mode),
     );
   } else if (job.type === 'influence') {
     const chain = pathTo(tl, job.targetNodeId);
@@ -395,7 +421,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
         new Set([job.placeholderId ?? '', ...(source ? pathTo(tl, source.id).map((n) => n.id) : [])]),
         latestStart(tl, [target.id, source?.id]),
       ),
-      ...responseSection(job, tl, 'children'),
+      ...responseSection(job, tl, 'children', mode),
     );
   } else {
     const target = tl.nodes[job.targetNodeId];
@@ -422,7 +448,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
       '## Outdated version of this node (for reference only)',
       describeNode(tl, target, chain.length, true),
       ...threadContext(tl, [...chain, target], target, new Set([target.id])),
-      ...responseSection(job, tl, 'node'),
+      ...responseSection(job, tl, 'node', mode),
     );
   }
   return parts.join('\n');
