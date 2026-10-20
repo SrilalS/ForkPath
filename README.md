@@ -38,7 +38,7 @@ the results back.
 
    The sidebar shows **Worker online** while it is polling. Jobs created while it is offline wait in the queue.
 
-`.claude/settings.json` pre-approves the two worker commands and writes to `worker/out/`, so the worker session
+`.claude/settings.json` pre-approves the worker commands (next, submit, search) and writes to `worker/out/`, so the worker session
 does not stop for permission prompts.
 
 ## Using it
@@ -53,7 +53,7 @@ does not stop for permission prompts.
 | ♻️ Stale nodes | **Regenerate** (model rewrites it to fit), **Keep**, or **Keep whole branch** |
 
 | 🧵 Threads | A **parallel thread** is a separate storyline in the same world (not an alternative). The LLM spawns one when an event sets off a related stream worth tracking on its own; you can start one with **Branch here** then **Parallel thread** |
-| ⇢ Influence | **Influence...** on a node, click 1-4 highlighted nodes in other streams, then **Influence N** in the banner. Pick a strength and optional time span and guidance; the model writes a new event after each picked node, shaped by the first one, and draws a dotted orange arrow to it. Like Merge, separate branches count as streams of one world. The new event cannot start before either node. The LLM also adds arrows on its own (only within one world). Remove arrows in the side panel. Editing a node marks the nodes it influences stale |
+| ⇢ Influence | **Influence...** on a node, click 1-4 highlighted nodes in other streams, then **Influence N** in the banner. Pick a strength and optional time span and guidance; the model writes a new event after each picked node, shaped by the first one, and draws a dotted orange arrow to it. Like Merge, separate branches count as streams of one world. The new event cannot start before either node. The LLM also checks every node it writes against nearby events in other streams (within 15 years, `INFLUENCE_WINDOW_YEARS` in `shared/world.ts`), can search older ones (`worker/search.mjs`, old hits show only their key changes), and adds arrows where there is a real effect; it never links model-made alternatives that exclude each other. Remove arrows in the side panel. Editing a node marks the nodes it influences stale |
 | ⤚⤙ Merge | **Merge with...** on a node, click 1-4 highlighted nodes on separate branches, then **Merge N** in the banner. The model writes where the two storylines meet (same world, Branch A wins conflicts unless your guidance says otherwise) |
 | ◷ Align by time | Top-bar toggle. Columns are ordered by each node's start date (parsed from its period), so events in different branches line up. Undated nodes sit just after their parent. Remembered per timeline |
 | ↔️ Panel width | Drag the side panel's left edge; double-click it to reset. The width is remembered |
@@ -95,7 +95,8 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `web/src/` | React UI (React Flow canvas, dagre layout, side panel) |
 | `shared/types.ts` | Types used by both sides |
 | `worker/WORKER.md` | The worker's instructions: loop, writing rules, when to branch, JSON shape |
-| `worker/next.mjs`, `worker/submit.mjs` | The worker's two commands |
+| `worker/next.mjs`, `worker/submit.mjs` | The worker's job loop commands |
+| `worker/search.mjs`, `server/src/search.ts` | Keyword search the worker uses to find older events that may influence a node |
 | `data/` | Timelines (`timelines/*.json`) and the job queue (`jobs.json`). Delete it to start fresh |
 
 ## Config

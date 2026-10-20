@@ -1,11 +1,21 @@
-// Graph rules shared by server and UI: threads, alternative worlds and which influence links are valid.
+// Graph rules shared by server and UI: streams, exclusive alternatives and which influence links are valid.
 //
-// Two kinds of children:
-//   - alternatives: siblings without threadName. Only one of them happens (a "choice").
-//   - threads: a child with threadName happens ALONGSIDE its siblings, as a separate stream of events.
-// A node's "choices" are the alternatives picked on every path from the root to it. Two nodes can coexist
-// in one world unless their choices pick different alternatives at the same fork.
+// Every branch is a STREAM of events in one shared world (like Merge treats them): user branches, "Continue
+// another way", and threads (threadName) all happen alongside each other. The exception is a set of
+// EXCLUSIVE ALTERNATIVES: siblings the model wrote in one branching result (they carry a likelihood). Only
+// one of those happens, so nodes under different ones are in different worlds and never influence each other.
+// A node's "choices" are the exclusive alternatives picked on every path from the root to it.
 import type { Timeline, TLNode } from './types.ts';
+import { parsePeriodStart } from './time.ts';
+
+/**
+ * How far the worker looks around the node it writes: briefs list other streams' events this close, search
+ * shows full summaries this close (older hits show only key changes), and a new node can influence existing
+ * events that start at most this many years after it. Older events can still influence it, without limit.
+ */
+export const INFLUENCE_WINDOW_YEARS = 15;
+/** An influence may point at an event that started up to this many years earlier (overlapping periods). */
+export const INFLUENCE_OVERLAP_YEARS = 5;
 
 export const parentIds = (n: TLNode) => [...(n.parentId ? [n.parentId] : []), ...(n.mergeParents ?? [])];
 
@@ -39,13 +49,36 @@ export function threadLabel(tl: Timeline, threadRootId: string): string {
 }
 
 /**
+ * A readable name for the stream `id` is in: the nearest thread name, or the title of the nearest user
+ * branch (a deviation below the root), or "Main".
+ */
+export function streamLabel(tl: Timeline, id: string): string {
+  const clip = (s: string) => (s.length > 48 ? `${s.slice(0, 45)}...` : s);
+  let cur: TLNode | undefined = tl.nodes[id];
+  while (cur) {
+    if (cur.threadName) return clip(cur.threadName);
+    if (cur.kind === 'deviation' && cur.parentId) return clip(cur.title);
+    cur = cur.parentId ? tl.nodes[cur.parentId] : undefined;
+  }
+  return 'Main';
+}
+
+/** Start year of a node's period, or null when it has no readable date. */
+export function startYear(n: TLNode): number | null {
+  const y = parsePeriodStart(n.period);
+  return y === null ? null : Math.floor(y);
+}
+
+export type LinkCheck = { ok: true } | { ok: false; reason: string };
+
+/**
  * Lookup tables for one snapshot of a timeline, built in O(n). Queries that loop over every node (link
- * targets, the brief's thread context, stale propagation) take one index instead of rescanning all nodes
+ * targets, the brief's nearby events, stale propagation) take one index instead of rescanning all nodes
  * per call, which made them cubic. Build a new index after changing the graph; it does not track edits.
  */
 export class WorldIndex {
   private readonly kids = new Map<string, TLNode[]>();
-  /** Alternatives (non-thread children) per parent. */
+  /** Exclusive alternatives (model-written siblings with a likelihood) per parent. */
   private readonly altCount = new Map<string, number>();
   private readonly choiceMemo = new Map<string, Set<string>>();
 
@@ -60,8 +93,12 @@ export class WorldIndex {
         if (list) list.push(n);
         else this.kids.set(p, [n]);
       }
-      if (n.parentId && !n.threadName) this.altCount.set(n.parentId, (this.altCount.get(n.parentId) ?? 0) + 1);
+      if (this.isAlternative(n)) this.altCount.set(n.parentId!, (this.altCount.get(n.parentId!) ?? 0) + 1);
     }
+  }
+
+  private isAlternative(n: TLNode): boolean {
+    return !!n.parentId && !n.threadName && n.likelihood !== undefined;
   }
 
   /** Direct children (primary and convergence), oldest first. */
@@ -85,12 +122,12 @@ export class WorldIndex {
     return out;
   }
 
-  /** True when `n` is one of several alternatives at its fork. */
+  /** True when `n` is one of several exclusive alternatives at its fork. */
   private isChoice(n: TLNode): boolean {
-    return !!n.parentId && !n.threadName && (this.altCount.get(n.parentId) ?? 0) > 1;
+    return this.isAlternative(n) && (this.altCount.get(n.parentId!) ?? 0) > 1;
   }
 
-  /** Every alternative picked on the way to `id` (through primary and convergence parents). */
+  /** Every exclusive alternative picked on the way to `id` (through primary and convergence parents). */
   choices(id: string): Set<string> {
     const hit = this.choiceMemo.get(id);
     if (hit) return hit;
@@ -103,19 +140,55 @@ export class WorldIndex {
     return out;
   }
 
-  sameWorld(a: string, b: string): boolean {
-    return !conflict(this.tl, this.choices(a), this.choices(b));
+  /** The pair of exclusive alternatives that keeps `a` and `b` apart, if any. */
+  private conflict(a: string, b: string): [TLNode, TLNode] | null {
+    const ca = this.choices(a);
+    const cb = this.choices(b);
+    for (const x of ca) {
+      const px = this.tl.nodes[x]?.parentId;
+      for (const y of cb) if (x !== y && px && px === this.tl.nodes[y]?.parentId) return [this.tl.nodes[x], this.tl.nodes[y]];
+    }
+    return null;
   }
 
+  /** Whether `a` and `b` can both happen (they are not under different exclusive alternatives). */
+  sameWorld(a: string, b: string): boolean {
+    return !this.conflict(a, b);
+  }
+
+  private worldClash(a: string, b: string): LinkCheck | null {
+    const clash = this.conflict(a, b);
+    return clash ? { ok: false, reason: `they are in different worlds ("${clash[0].title}" vs "${clash[1].title}")` } : null;
+  }
+
+  /**
+   * Whether "`from` influences `to`" is a valid link between two existing events: on separate streams, in
+   * one world, and `from` not starting well after `to`. Any age gap is fine (old events can matter); the
+   * worker's forward reach is capped separately where its links are applied.
+   */
   canLink(from: string, to: string): LinkCheck {
-    return checkLink(this, from, to);
+    const tl = this.tl;
+    const f = tl.nodes[from];
+    const t = tl.nodes[to];
+    if (!f || !t) return { ok: false, reason: 'node not found' };
+    if (from === to) return { ok: false, reason: 'a node cannot influence itself' };
+    if (ancestorIds(tl, to).has(from)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
+    if (ancestorIds(tl, from).has(to)) return { ok: false, reason: `"${t.title}" comes before "${f.title}" on the same path` };
+    const clash = this.worldClash(from, to);
+    if (clash) return clash;
+    const fy = startYear(f);
+    const ty = startYear(t);
+    if (fy !== null && ty !== null && fy - ty > INFLUENCE_OVERLAP_YEARS) {
+      return { ok: false, reason: `"${f.title}" starts ${fy - ty} years after "${t.title}", so it cannot shape it` };
+    }
+    return { ok: true };
   }
 
   /**
    * Whether the user can make `from` influence a NEW event written after `target` (the influence flow).
-   * Like Merge, this treats separate branches as streams of one world, so the world rules of canLink do
-   * not apply; the dates are checked when the result comes back. `target` may be an ancestor of `from`
-   * (a thread influencing the stream it branched off), but not an earlier node in `from`'s own stream.
+   * No time window here (the user decides); the new event's dates are checked when the result comes back.
+   * `target` may be an ancestor of `from` (a thread influencing the stream it branched off), but not an
+   * earlier node in `from`'s own stream.
    */
   canInfluence(from: string, target: string): LinkCheck {
     const tl = this.tl;
@@ -126,7 +199,7 @@ export class WorldIndex {
     if (t.status !== 'ready') return { ok: false, reason: `"${t.title}" is not ready yet` };
     const up = ancestorIds(tl, from);
     if (ancestorIds(tl, target).has(from)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
-    // A new non-thread child of `target` is an alternative to its existing ones: invalid if `from` lies under one.
+    // A new non-thread child of `target` would continue the stream `from` is in: that is just Continue.
     const rival = this.children(target).find((c) => !c.threadName && c.parentId === target && (c.id === from || up.has(c.id)));
     if (rival) {
       return {
@@ -137,60 +210,16 @@ export class WorldIndex {
             : `"${t.title}" is earlier in the same stream (a new event there would be an alternative to "${rival.title}")`,
       };
     }
-    return { ok: true };
+    return this.worldClash(from, target) ?? { ok: true };
   }
 }
 
-/** Every alternative picked on the way to `id` (through primary and convergence parents). */
-export function choicesOf(tl: Timeline, id: string): Set<string> {
-  return new WorldIndex(tl).choices(id);
-}
-
-/** The pair of alternatives that keeps `a` and `b` apart, if any. */
-function conflict(tl: Timeline, a: Set<string>, b: Set<string>): [string, string] | null {
-  for (const x of a) {
-    const px = tl.nodes[x]?.parentId;
-    for (const y of b) if (x !== y && px && px === tl.nodes[y]?.parentId) return [x, y];
-  }
-  return null;
-}
-
-/** Whether `a` and `b` can both happen in one world. Pass an index when calling this in a loop. */
+/** Whether `a` and `b` can both happen. Pass an index when calling this in a loop. */
 export function sameWorld(tl: Timeline, a: string, b: string, ix = new WorldIndex(tl)): boolean {
   return ix.sameWorld(a, b);
 }
 
-export type LinkCheck = { ok: true } | { ok: false; reason: string };
-
-/**
- * Whether "`from` influences `to`" is a valid link. Every world containing `to` must also contain `from`;
- * otherwise `to` would carry an influence that does not exist in some of its worlds.
- * Pass an index when calling this in a loop.
- */
+/** Whether "`from` influences `to`" is a valid link (see WorldIndex.canLink). Pass an index in loops. */
 export function canLink(tl: Timeline, from: string, to: string, ix = new WorldIndex(tl)): LinkCheck {
-  return checkLink(ix, from, to);
-}
-
-function checkLink(ix: WorldIndex, from: string, to: string): LinkCheck {
-  const tl = ix.tl;
-  const f = tl.nodes[from];
-  const t = tl.nodes[to];
-  if (!f || !t) return { ok: false, reason: 'node not found' };
-  if (from === to) return { ok: false, reason: 'a node cannot influence itself' };
-  if (ancestorIds(tl, to).has(from)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
-  if (ancestorIds(tl, from).has(to)) return { ok: false, reason: `"${t.title}" comes before "${f.title}" on the same path` };
-  const cf = ix.choices(from);
-  const ct = ix.choices(to);
-  const clash = conflict(tl, cf, ct);
-  if (clash) {
-    return { ok: false, reason: `they are in different worlds ("${tl.nodes[clash[0]].title}" vs "${tl.nodes[clash[1]].title}")` };
-  }
-  const missing = [...cf].find((c) => !ct.has(c));
-  if (missing) {
-    return {
-      ok: false,
-      reason: `"${t.title}" is shared by worlds where "${tl.nodes[missing].title}" does not happen; link from an earlier node or start a world-specific thread instead`,
-    };
-  }
-  return { ok: true };
+  return ix.canLink(from, to);
 }

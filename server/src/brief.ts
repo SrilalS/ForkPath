@@ -1,12 +1,19 @@
 import { SIGNIFICANCES, type Job, type Significance, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
-import { ancestorIds, threadLabel, threadRootOf, WorldIndex } from '../../shared/world.ts';
-import { parsePeriodStart } from '../../shared/time.ts';
+import {
+  ancestorIds,
+  INFLUENCE_WINDOW_YEARS,
+  startYear,
+  streamLabel,
+  threadLabel,
+  threadRootOf,
+  WorldIndex,
+} from '../../shared/world.ts';
 import { childrenOf, pathTo } from './store.ts';
 
 /** Ancestors this close to the target get their full narrative; older ones only the summary. */
 const FULL_NARRATIVE_DEPTH = 3;
-/** At most this many other threads are summarized, the most recent first. */
-const MAX_OTHER_THREADS = 8;
+/** At most this many nearby events from other streams are listed, the closest in time first. */
+const MAX_NEARBY = 8;
 
 const FIELD_HINT =
   'significance: minor | notable | major | pivotal. tone: neutral | conflict | catastrophe | upheaval | decline | prosperity | discovery | diplomacy. strength: mild | moderate | strong.';
@@ -60,13 +67,26 @@ function otherBranchSections(tl: Timeline, primary: TLNode[], otherIds: string[]
   return out;
 }
 
+/** The first sentence of a summary (capped), enough to judge relevance without the full text. */
+const firstSentence = (s: string) => {
+  const m = s.match(/^.+?[.!?](?=\s|$)/);
+  const out = m ? m[0] : s;
+  return out.length > 240 ? `${out.slice(0, 237)}...` : out;
+};
+
 const short = (n: TLNode) => `"${n.title}" (${n.period || 'no date'}) [id: ${n.id}]`;
 
 /**
- * Influence links touching the storyline (any node in `chain`), and the latest state of every other thread
- * that coexists with `anchor` in one world, up to anchor's date.
+ * Influence links touching the storyline (any node in `chain`), and nearby events in other streams around
+ * `anchorYear` (when the node being written starts), as link candidates.
  */
-function threadContext(tl: Timeline, chain: TLNode[], anchor: TLNode, exclude: Set<string>): string[] {
+function threadContext(
+  tl: Timeline,
+  chain: TLNode[],
+  anchor: TLNode,
+  exclude: Set<string>,
+  anchorYear: number | null = startYear(anchor),
+): string[] {
   const out: string[] = [];
   const inChain = new Set(chain.map((n) => n.id));
 
@@ -84,34 +104,79 @@ function threadContext(tl: Timeline, chain: TLNode[], anchor: TLNode, exclude: S
     }
   }
 
-  const ownThread = threadRootOf(tl, anchor.id);
-  const anchorDate = parsePeriodStart(anchor.period);
-  const upstream = ancestorIds(tl, anchor.id);
-  const ix = new WorldIndex(tl);
-  const latest = new Map<string, { node: TLNode; date: number }>();
-  for (const n of Object.values(tl.nodes)) {
-    if (n.status !== 'ready' || exclude.has(n.id) || inChain.has(n.id) || upstream.has(n.id)) continue;
-    const thread = threadRootOf(tl, n.id);
-    if (thread === ownThread) continue;
-    const date = parsePeriodStart(n.period) ?? -Infinity;
-    if (anchorDate !== null && date > anchorDate + 1) continue; // not yet happened at this point
-    if (!ix.sameWorld(n.id, anchor.id)) continue;
-    const cur = latest.get(thread);
-    if (!cur || date > cur.date || (date === cur.date && n.createdAt > cur.node.createdAt)) latest.set(thread, { node: n, date });
-  }
-  const threads = [...latest.entries()].sort((a, b) => b[1].date - a[1].date).slice(0, MAX_OTHER_THREADS);
-  if (threads.length) {
+  const nearby = nearbyEvents(tl, anchor, new Set([...exclude, ...inChain]), anchorYear);
+  if (nearby.length && anchorYear !== null) {
     out.push(
       '',
-      '## Other threads in this world (latest known event in each, for awareness)',
-      'These run in parallel with this storyline. Reflect them where relevant and link to them when there is a real effect.',
+      `## Nearby events in other streams (within ${INFLUENCE_WINDOW_YEARS} years of ${anchorYear}, closest first)`,
+      'These happen in the same world as your node. Check each: does it shape what you write, or will your node shape it?',
+      'Where there is a real causal effect, link it: "influencedBy" for events that act on yours, "influences" for events yours acts on. ' +
+        'Most nodes need 0-2 links. For older events (or ones not listed), search: see "Finding other events" below.',
     );
-    for (const [root, { node }] of threads) {
-      out.push(`- Thread "${threadLabel(tl, root)}": ${short(node)}: ${node.summary}`);
-      if (node.keyChanges.length) out.push(`  Key changes: ${node.keyChanges.join('; ')}`);
+    for (const { node, gap } of nearby) {
+      const when = gap === 0 ? 'same year' : gap < 0 ? `${-gap}y earlier` : `${gap}y later`;
+      out.push(`- [${streamLabel(tl, node.id)}, ${when}] ${short(node)}: ${firstSentence(node.summary)}`);
     }
   }
   return out;
+}
+
+export interface Candidate {
+  node: TLNode;
+  /** Start year minus the anchor year (negative = earlier); null when either is undated. */
+  gap: number | null;
+}
+
+/**
+ * Every event the node being written may link to: ready, in another stream of the same world (not the
+ * storyline itself, its ancestors or its own future), not in `exclude`, and starting no more than
+ * INFLUENCE_WINDOW_YEARS after `anchorYear`. There is no limit backwards: very old events can matter.
+ */
+export function linkCandidates(tl: Timeline, anchor: TLNode, exclude: Set<string>, anchorYear: number | null): Candidate[] {
+  const ix = new WorldIndex(tl);
+  const upstream = ancestorIds(tl, anchor.id);
+  const downstream = new Set(ix.descendants(anchor.id).map((n) => n.id));
+  const out: Candidate[] = [];
+  for (const n of Object.values(tl.nodes)) {
+    if (n.status !== 'ready' || n.id === anchor.id || exclude.has(n.id) || upstream.has(n.id) || downstream.has(n.id)) continue;
+    const y = startYear(n);
+    const gap = y === null || anchorYear === null ? null : y - anchorYear;
+    if (gap !== null && gap > INFLUENCE_WINDOW_YEARS) continue;
+    if (!ix.sameWorld(n.id, anchor.id)) continue;
+    out.push({ node: n, gap });
+  }
+  return out;
+}
+
+/** Candidates within the window either side of the anchor, closest first (the brief's "nearby" list). */
+export function nearbyEvents(tl: Timeline, anchor: TLNode, exclude: Set<string>, anchorYear: number | null) {
+  return linkCandidates(tl, anchor, exclude, anchorYear)
+    .filter((c): c is { node: TLNode; gap: number } => c.gap !== null && Math.abs(c.gap) <= INFLUENCE_WINDOW_YEARS)
+    .sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap) || a.gap - b.gap)
+    .slice(0, MAX_NEARBY);
+}
+
+/** The year a new node written after `parents` starts at the earliest: the latest of their start years. */
+function latestStart(tl: Timeline, ids: (string | undefined)[]): number | null {
+  const years = ids.map((id) => (id && tl.nodes[id] ? startYear(tl.nodes[id]) : null)).filter((y): y is number => y !== null);
+  return years.length ? Math.max(...years) : null;
+}
+
+/**
+ * What a job's links are judged against: the node it writes after (or rewrites), the year the new node
+ * starts at the earliest, and nodes already shown in full elsewhere in the brief.
+ */
+export function jobScope(tl: Timeline, job: Job): { anchor: TLNode; anchorYear: number | null; exclude: Set<string> } | null {
+  const anchor = tl.nodes[job.targetNodeId];
+  if (!anchor) return null;
+  const pathIds = (id: string | undefined) => (id && tl.nodes[id] ? pathTo(tl, id).map((n) => n.id) : []);
+  if (job.type === 'regenerate') return { anchor, anchorYear: startYear(anchor), exclude: new Set([anchor.id]) };
+  const others = job.type === 'merge' ? (job.mergeWith ?? []) : job.type === 'influence' ? [job.influenceFrom] : [];
+  return {
+    anchor,
+    anchorYear: latestStart(tl, [anchor.id, ...others]),
+    exclude: new Set([job.placeholderId ?? '', ...others.flatMap(pathIds)]),
+  };
 }
 
 /** Target share of each significance (matches the table in WORKER.md). */
@@ -153,6 +218,12 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
         ? `{ "children": [ { ${node}, "likelihood": 1, "influences": [], "influencedBy": [], "spawnThreads": [] } ], "branchReason": "", "threads": [] }`
         : `{ "node": { ${node}, "influences": [], "influencedBy": [] } }`;
   const lines = [
+    '',
+    '## Finding other events (optional, at most 3 searches)',
+    `If an older or unlisted event in another stream may shape this node (a person, program, treaty or war that comes back), search for it: ` +
+      `\`node worker/search.mjs ${job.id} "<keywords>"\` (add \`--before <year>\` / \`--after <year>\` to narrow by start year). ` +
+      `Results older than ${INFLUENCE_WINDOW_YEARS} years show only their key changes; \`node worker/search.mjs ${job.id} --node <id>\` prints one event in full. ` +
+      'Every id a search returns can be linked.',
     '',
     '## Your response',
     `Write JSON to \`${outFile}\` with this shape, then run \`node worker/submit.mjs ${job.id}\`:`,
@@ -246,6 +317,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
         chain,
         tl.nodes[job.targetNodeId],
         new Set([job.placeholderId ?? '', ...others.flatMap((id) => pathTo(tl, id).map((n) => n.id))]),
+        latestStart(tl, [job.targetNodeId, ...others]),
       ),
       ...responseSection(job, tl, 'children'),
     );
@@ -284,7 +356,13 @@ export function buildBrief(job: Job, tl: Timeline): string {
       );
     }
     parts.push(
-      ...threadContext(tl, chain, target, new Set([job.placeholderId ?? '', ...(source ? pathTo(tl, source.id).map((n) => n.id) : [])])),
+      ...threadContext(
+        tl,
+        chain,
+        target,
+        new Set([job.placeholderId ?? '', ...(source ? pathTo(tl, source.id).map((n) => n.id) : [])]),
+        latestStart(tl, [target.id, source?.id]),
+      ),
       ...responseSection(job, tl, 'children'),
     );
   } else {

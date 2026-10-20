@@ -173,8 +173,9 @@ When branching:
 
 ## 4b. Threads and influence links
 
-Branches are **alternatives** (only one happens). Threads are **parallel**: a separate stream of events in the
-same world. Use them to keep each node focused instead of cramming unrelated storylines into one.
+The children you return in one result with likelihoods are **alternatives** (only one happens). Threads are
+**parallel**: a separate stream of events in the same world. Use them to keep each node focused instead of
+cramming unrelated storylines into one.
 
 ```
  Main:     A ──▶ B ──▶ C
@@ -214,17 +215,40 @@ told in a sentence or two; mention it in the narrative instead.
 - Never write new events into an existing thread. Link to it instead.
 
 **Influence links** (`influences` / `influencedBy` on any node you write, including thread starts and
-REGENERATE) record that one event affects another in a different thread, without making it a parent.
+REGENERATE) record that one event affects another in a different stream, without making it a parent. A
+stream is any separate branch or thread: user branches count as streams of one world, like in MERGE.
+
+**Check for influences on every node you write.** The brief's "Nearby events in other streams" section lists
+up to 8 events within 15 years of your node, closest first. For each one, ask:
+
+1. Does it shape what I am writing? Then `influencedBy` it, and reflect it in the narrative.
+2. Will my node shape it (it starts around or after mine)? Then `influences` it.
+3. Neither, or only vaguely? No link. Most nodes need 0-2 links; do not link for mere topical similarity.
+
+**Search for older events** when your node brings back something from long ago in another stream: a person,
+a weapons program, a treaty, a migration, a grudge. At most 3 searches per job; skip it when the nearby
+list already covers what matters.
+
+```
+node worker/search.mjs <jobId> "thorium reactor"              best 6 matches
+node worker/search.mjs <jobId> "tamil refugees" --before 1980 only events starting before 1980
+node worker/search.mjs <jobId> --node <id>                    one event in full (summary, key changes, narrative)
+```
+
+- Results only contain events your node may link to (other streams, same world, not too far ahead).
+- Events older than 15 years show only their **key changes**: that is what an old event leaves behind. Use
+  `--node` only when you need the full story.
+- Keywords match titles, key changes, summaries and narratives. Use 1-3 distinctive words, not sentences.
 
 - `node` is an id shown in the brief (`[id: ...]`), or `@key` for another node in the same result (give that
   node a `"key"`). Use `@key` to connect parallel threads you start together.
 - `strength`: `mild` (nudges it), `moderate` (clearly shapes it), `strong` (largely drives it).
 - `note`: one sentence on the effect.
-- Only link when there is a real causal effect. The brief's "Other threads in this world" section shows the
-  latest event of each parallel thread; use it to stay consistent and to find link targets.
-- The server drops links that break world rules (for example into a node shared by alternatives your node is
-  not part of, or between alternatives) and reports them in the `OK` line. That is not an error; nothing else
-  needs fixing.
+- The server drops links that break the rules and reports them in the `OK` line (not an error, nothing to
+  fix): events on the same path, under different exclusive alternatives (siblings with likelihoods), an
+  influence on an event that started more than 5 years before the influencing one, or `influences` from your
+  node to an existing event starting more than 15 years after it. Older events influencing your node have no
+  age limit.
 
 ---
 

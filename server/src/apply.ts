@@ -1,7 +1,7 @@
 // Applies worker results and link edits to a timeline. Pure functions over the Timeline object (no I/O),
 // so they can be tested without the HTTP layer.
 import type { InfluenceLink, Job, Strength, Timeline, TLNode } from '../../shared/types.ts';
-import { canLink, WorldIndex } from '../../shared/world.ts';
+import { canLink, INFLUENCE_WINDOW_YEARS, startYear, WorldIndex } from '../../shared/world.ts';
 import { parsePeriodStart } from '../../shared/time.ts';
 import { descendantsOf, makeNode, newId, now } from './store.ts';
 import type { continueResult, LinkRef, regenerateResult, threadStart } from './schema.ts';
@@ -18,7 +18,7 @@ export interface ApplyReport {
   dropped: string[];
 }
 
-/** Adds a link if the world rules allow it. Returns the reason when they do not. */
+/** Adds a link if the link rules (separate streams, one world, time window) allow it. Returns the reason when they do not. */
 export function addLink(
   tl: Timeline,
   from: string,
@@ -34,8 +34,8 @@ export function addLink(
 }
 
 /**
- * Adds or updates a link without the world rules. Only for the user's influence flow, which treats separate
- * branches as streams of one world (like Merge) and was validated with canInfluence when it started.
+ * Adds or updates a link without the link rules (no time window). Only for the user's influence flow, which
+ * was validated with canInfluence when it started.
  */
 export function putLink(
   tl: Timeline,
@@ -68,6 +68,15 @@ function applyLinkRefs(
       return;
     }
     const [from, to] = dir === 'out' ? [other, id] : [id, other];
+    // Old events may shape the new node without limit, but the new node only reaches a little way forward.
+    const fy = startYear(tl.nodes[from]);
+    const ty = startYear(tl.nodes[to]);
+    if (dir === 'out' && !ref.node.startsWith('@') && fy !== null && ty !== null && ty - fy > INFLUENCE_WINDOW_YEARS) {
+      report.dropped.push(
+        `${tl.nodes[from].title} -> ${tl.nodes[to].title}: ${ty - fy} years ahead (a new node influences at most ${INFLUENCE_WINDOW_YEARS} years forward)`,
+      );
+      return;
+    }
     const r = addLink(tl, from, to, ref.strength, ref.note, 'llm', ix);
     if ('error' in r) report.dropped.push(`${tl.nodes[from].title} -> ${tl.nodes[to].title}: ${r.error}`);
     else report.links++;
@@ -172,7 +181,7 @@ export function applyRegenerate(tl: Timeline, node: TLNode, result: RegenerateRe
 }
 
 /** Whole start year of a period, or null when it cannot be read (undated nodes are never flagged). */
-const startYear = (period: string) => {
+const periodYear = (period: string) => {
   const y = parsePeriodStart(period);
   return y === null ? null : Math.floor(y);
 };
@@ -189,12 +198,12 @@ export function chronologyIssues(
   const dated = parents
     .map((id) => tl.nodes[id])
     .filter((p): p is TLNode => !!p)
-    .map((p) => ({ p, year: startYear(p.period) }))
+    .map((p) => ({ p, year: periodYear(p.period) }))
     .filter((x): x is { p: TLNode; year: number } => x.year !== null);
   if (!dated.length) return [];
   const latest = dated.reduce((a, b) => (b.year > a.year ? b : a));
   return written.flatMap((w) => {
-    const y = startYear(w.period);
+    const y = periodYear(w.period);
     return y !== null && y < latest.year
       ? [`"${w.title}" (${w.period}) starts before "${latest.p.title}" (${latest.p.period}), which it follows. Start it in ${latest.year} or later.`]
       : [];
@@ -211,9 +220,9 @@ export function continueChronology(tl: Timeline, job: Job, result: ContinueResul
   ];
   const issues = chronologyIssues(tl, [...result.children, ...result.threads], parents);
   for (const c of result.children) {
-    const y = startYear(c.period);
+    const y = periodYear(c.period);
     for (const t of c.spawnThreads ?? []) {
-      const ty = startYear(t.period);
+      const ty = periodYear(t.period);
       if (y !== null && ty !== null && ty < y) {
         issues.push(`Thread "${t.thread}": "${t.title}" (${t.period}) starts before "${c.title}" (${c.period}), which sets it off.`);
       }

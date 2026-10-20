@@ -3,6 +3,7 @@
     "allow": [
       "Bash(node worker/next.mjs:*)",
       "Bash(node worker/submit.mjs:*)",
+      "Bash(node worker/search.mjs:*)",
       "Edit(/worker/out/**)"
     ]
   }

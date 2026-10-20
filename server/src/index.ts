@@ -30,6 +30,7 @@ import {
   workerStatus,
 } from './jobs.ts';
 import { buildBrief } from './brief.ts';
+import { searchForJob, showNode } from './search.ts';
 import {
   addLink,
   applyContinue,
@@ -521,6 +522,40 @@ app.get('/api/worker/next', async (req, res) => {
 });
 
 app.get('/api/worker/jobs/:jobId', h((req) => jobPayload(String(req.params.jobId))));
+
+/** The job and its timeline, for the worker's search commands. */
+function jobContext(req: Request) {
+  touchWorker();
+  const job = getJob(String(req.params.jobId));
+  if (!job) throw new HttpError(404, 'Job not found');
+  const tl = getTimeline(job.timelineId);
+  if (!tl) throw new HttpError(410, 'Timeline was deleted');
+  return { job, tl };
+}
+
+const yearParam = (v: unknown) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v));
+
+app.get(
+  '/api/worker/jobs/:jobId/search',
+  h((req, res) => {
+    const { job, tl } = jobContext(req);
+    const text = searchForJob(tl, job, {
+      query: String(req.query.q ?? ''),
+      before: yearParam(req.query.before),
+      after: yearParam(req.query.after),
+      limit: yearParam(req.query.limit),
+    });
+    res.type('text/plain').send(text);
+  }),
+);
+
+app.get(
+  '/api/worker/jobs/:jobId/nodes/:nodeId',
+  h((req, res) => {
+    const { tl } = jobContext(req);
+    res.type('text/plain').send(showNode(tl, String(req.params.nodeId)));
+  }),
+);
 
 /** A node dated before what it follows breaks the timeline; nothing is saved and the worker fixes it. */
 function rejectChronology(issues: string[]) {
