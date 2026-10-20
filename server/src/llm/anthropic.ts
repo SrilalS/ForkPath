@@ -55,8 +55,14 @@ class AnthropicSession implements ChatSession {
     return h;
   }
 
-  async ask(text: string): Promise<string> {
-    this.messages.push({ role: 'user', content: text });
+  async ask(text: string | string[]): Promise<string> {
+    const parts = (Array.isArray(text) ? text : [text]).filter(Boolean);
+    // Each stable prefix part carries its own breakpoint, so the next job along the same storyline reads it
+    // from cache. With the system block and the newest-block breakpoint that stays within the API's 4.
+    const blocks: Block[] = parts.map((p, i) =>
+      i < parts.length - 1 ? { type: 'text', text: p, cache_control: { type: 'ephemeral' } } : { type: 'text', text: p },
+    );
+    this.messages.push({ role: 'user', content: blocks.length === 1 ? parts[0] : blocks });
     for (let round = 0; round < this.opts.maxToolCalls + 4; round++) {
       const body: Record<string, unknown> = {
         model: this.cfg.model,

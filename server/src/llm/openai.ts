@@ -33,8 +33,9 @@ class OpenAISession implements ChatSession {
     this.toolCallsLeft = opts.maxToolCalls;
   }
 
-  async ask(text: string): Promise<string> {
-    this.messages.push({ role: 'user', content: text });
+  async ask(text: string | string[]): Promise<string> {
+    // OpenAI-style servers cache matching prefixes on their own, so the stable parts just go first.
+    this.messages.push({ role: 'user', content: Array.isArray(text) ? text.join('\n\n') : text });
     // Bounded: each round either answers or spends tool calls; a model that ignores tool_choice gets cut off.
     for (let round = 0; round < this.opts.maxToolCalls + 4; round++) {
       const allowTools = this.toolCallsLeft > 0 && this.opts.tools.length > 0;

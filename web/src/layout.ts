@@ -1,15 +1,13 @@
-import { Graph, layout } from '@dagrejs/dagre';
 import { MarkerType, Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
 import type { Timeline, TLNode } from '../../shared/types.ts';
 import { isMajor, TONE_STYLE } from './mood.ts';
-import { parentIdsOf, streamNameOf, threadColors, threadLabel, threadRootOf } from './graph.ts';
+import { streamNameOf, threadColors, threadLabel, threadRootOf } from './graph.ts';
+import { computePlacement, NODE_H, NODE_W, placementKey, type LayoutMode, type Placement, type TimeAxis } from './placement.ts';
+
+export { NODE_H, NODE_W, type LayoutMode, type TimeAxis } from './placement.ts';
 
 /** Tag color for a renamed stream that is not a thread (threads keep their own color). */
 const RENAMED_MAIN_COLOR = '#9aa7c2';
-import { formatYear, parsePeriodStart } from '../../shared/time.ts';
-
-export const NODE_W = 300;
-export const NODE_H = 168;
 
 const HANDLE = 8;
 /** Matches the rendered <Handle>s: centered on the left and right borders (React Flow's default placement). */
@@ -27,138 +25,26 @@ export type FlowNodeData = {
 };
 export type FlowNode = Node<FlowNodeData, 'timeline'>;
 
-/** 'structure': compact tree by generation. 'time': columns ordered by date, so branches line up. */
-export type LayoutMode = 'structure' | 'time';
-
-export interface TimeColumn {
-  x: number;
-  label: string;
-  /** A repeat of the previous column's year (an undated or same-year follow-up). */
-  repeat: boolean;
-}
-export interface TimeAxis {
-  columns: TimeColumn[];
-  top: number;
-  bottom: number;
-  /** Nodes with no readable date, placed right after their parent. */
-  undated: number;
-}
-
-const NODE_SEP = 36;
-const RANK_SEP = 90;
-const MARGIN = 40;
-
-type TimeKey = { year: number; sub: number };
-const cmpKey = (a: TimeKey, b: TimeKey) => a.year - b.year || a.sub - b.sub;
+/** Nodes in creation order: parents before children, which placement and stream naming rely on. */
+export const sortedNodes = (tl: Timeline) => Object.values(tl.nodes).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
 /**
- * Gives every node a time key: its start year, or (when undated or dated before its parent) its parent's
- * year with sub + 1 so it still lands in a later column. Nodes in different branches with the same year
- * share a column. Parents always come before children in `all` (sorted by creation time).
- */
-function timeKeys(tl: Timeline, all: TLNode[]) {
-  const keys = new Map<string, TimeKey>();
-  let undated = 0;
-  for (const n of all) {
-    const parsed = parsePeriodStart(n.period);
-    const year = parsed === null ? null : Math.floor(parsed);
-    if (year === null && n.status === 'ready') undated++;
-    const parentKeys = parentIdsOf(n)
-      .map((id) => keys.get(id))
-      .filter((k): k is TimeKey => !!k);
-    if (!parentKeys.length) {
-      keys.set(n.id, { year: year ?? -Infinity, sub: 0 });
-      continue;
-    }
-    const latest = parentKeys.sort(cmpKey).at(-1)!;
-    keys.set(n.id, year !== null && year > latest.year ? { year, sub: 0 } : { year: latest.year, sub: latest.sub + 1 });
-  }
-  return { keys, undated };
-}
-
-type Placement = { pos: Map<string, { x: number; y: number }>; axis: TimeAxis | null };
-
-/**
- * The last layout, keyed by everything positions depend on: ids and parents (plus periods and status in
- * time mode). An edit to a title, a summary or a stale mark reuses it and skips dagre, which is the
- * slow part (seconds at a few thousand nodes).
+ * The last layout, keyed by everything positions depend on (see placementKey). An edit to a title, a
+ * summary or a stale mark reuses it and skips dagre, which is the slow part (seconds at a few thousand nodes).
  */
 let lastPlacement: { key: string; placement: Placement } | null = null;
 
-function placementKey(all: TLNode[], mode: LayoutMode): string {
-  return (
-    mode +
-    all.map((n) => `${n.id}<${n.parentId ?? ''}${n.mergeParents?.length ? `+${n.mergeParents.join('+')}` : ''}${mode === 'time' ? `@${n.period}@${n.status}` : ''}`).join('|')
-  );
-}
-
-/** Where every card goes: dagre's tree, re-columned by date in time mode. */
-function place(tl: Timeline, all: TLNode[], mode: LayoutMode): Placement {
-  const key = placementKey(all, mode);
-  if (lastPlacement?.key === key) return lastPlacement.placement;
-
-  const g = new Graph();
-  g.setGraph({ rankdir: 'LR', nodesep: NODE_SEP, ranksep: RANK_SEP, marginx: MARGIN, marginy: MARGIN });
-  g.setDefaultEdgeLabel(() => ({}));
-  for (const n of all) g.setNode(n.id, { width: NODE_W, height: NODE_H });
-  for (const n of all) {
-    if (n.parentId && tl.nodes[n.parentId]) g.setEdge(n.parentId, n.id);
-    // Convergence links count for ranking too, so a merge node sits after both of its branches.
-    for (const p of n.mergeParents ?? []) if (tl.nodes[p]) g.setEdge(p, n.id);
-  }
-  layout(g);
-
-  // Top-left corner of each card. Structure mode uses dagre as is.
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const n of all) {
-    const p = g.node(n.id) as { x: number; y: number };
-    pos.set(n.id, { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 });
-  }
-
-  let axis: TimeAxis | null = null;
-  if (mode === 'time' && all.length) {
-    // Columns come from dates; dagre's vertical order is kept to limit edge crossings.
-    const { keys, undated } = timeKeys(tl, all);
-    const distinct = [...new Map([...keys.values()].map((k) => [`${k.year}:${k.sub}`, k])).values()].sort(cmpKey);
-    const colOf = new Map(distinct.map((k, i) => [`${k.year}:${k.sub}`, i]));
-    const colX = (i: number) => MARGIN + i * (NODE_W + RANK_SEP);
-
-    const byCol = new Map<number, TLNode[]>();
-    for (const n of all) {
-      const k = keys.get(n.id)!;
-      const c = colOf.get(`${k.year}:${k.sub}`)!;
-      const members = byCol.get(c);
-      if (members) members.push(n);
-      else byCol.set(c, [n]);
-    }
-    let top = Infinity;
-    let bottom = -Infinity;
-    for (const [c, members] of byCol) {
-      // Same column, so push overlapping cards down while keeping their order.
-      members.sort((a, b) => pos.get(a.id)!.y - pos.get(b.id)!.y);
-      let prevBottom = -Infinity;
-      for (const n of members) {
-        const y = Math.max(pos.get(n.id)!.y, prevBottom + NODE_SEP);
-        pos.set(n.id, { x: colX(c), y });
-        prevBottom = y + NODE_H;
-        top = Math.min(top, y);
-        bottom = Math.max(bottom, prevBottom);
-      }
-    }
-    axis = {
-      columns: distinct.map((k, i) => ({
-        x: colX(i),
-        label: Number.isFinite(k.year) ? formatYear(k.year) : 'Start',
-        repeat: k.sub > 0,
-      })),
-      top,
-      bottom,
-      undated,
-    };
-  }
-
-  const placement = { pos, axis };
+export const cachedPlacement = (key: string) => (lastPlacement?.key === key ? lastPlacement.placement : null);
+export const rememberPlacement = (key: string, placement: Placement) => {
   lastPlacement = { key, placement };
+};
+
+/** The layout for `all`, computed here on the main thread unless it is the cached one. */
+export function placeNow(all: TLNode[], mode: LayoutMode, key = placementKey(all, mode)): Placement {
+  const hit = cachedPlacement(key);
+  if (hit) return hit;
+  const placement = computePlacement(all, mode);
+  rememberPlacement(key, placement);
   return placement;
 }
 
@@ -196,9 +82,14 @@ let lastFlow: { timelineId: string; nodes: Map<string, FlowNode>; edges: Map<str
 const sameThread = (a: FlowNodeData['thread'], b: FlowNodeData['thread']) =>
   a === b || (!!a && !!b && a.name === b.name && a.color === b.color && a.isStart === b.isStart);
 
-export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: FlowNode[]; edges: Edge[]; axis: TimeAxis | null } {
-  const all = Object.values(tl.nodes).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const { pos, axis } = place(tl, all, mode);
+/** Flow nodes and edges for the canvas. `placement` comes from usePlacement (or is computed here). */
+export function toFlow(
+  tl: Timeline,
+  mode: LayoutMode = 'structure',
+  placement?: Placement,
+): { nodes: FlowNode[]; edges: Edge[]; axis: TimeAxis | null } {
+  const all = sortedNodes(tl);
+  const { pos, axis } = placement ?? placeNow(all, mode);
   const threads = streams(tl, all);
   const colors = threadColors(tl);
   const prev = lastFlow?.timelineId === tl.id ? lastFlow : null;

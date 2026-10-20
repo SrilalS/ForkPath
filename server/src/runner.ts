@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Generation, Job } from '../../shared/types.ts';
-import { API_TOOLS, buildBrief } from './brief.ts';
+import { API_TOOLS, buildBriefParts } from './brief.ts';
 import { builtinProblem, costUsd, getConfig, onConfigChange, resolveBuiltin } from './config.ts';
 import { monthSummary, recordUsage } from './usage.ts';
 import { claimForBuiltin, getJob, onQueueChange, releaseJob, setBuiltinStatus } from './jobs.ts';
@@ -155,7 +155,8 @@ async function attemptJob(
 
   let reply: string;
   try {
-    reply = await session.ask(buildBrief(job, tl, 'api'));
+    const { prefix, body } = buildBriefParts(job, tl, 'api');
+    reply = await session.ask(prefix ? [prefix, body] : body);
   } catch (err) {
     return handleProviderError(err, job, deps, log);
   }

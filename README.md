@@ -85,7 +85,7 @@ paste a key, load the model list, **Test connection**, and save. Settings are st
 | `budget.monthlyUsd` (top level) | none | Monthly spending cap (UTC calendar month). When reached, new jobs wait in the queue; running ones finish |
 
 Both engines use the same briefs, validation, follow-ups and writer rules (`.claude/agents/althistory-writer.md`).
-Every built-in job is logged in `data/usage.json` (tokens, cost, outcome, including failed jobs); Settings shows
+Every built-in job is logged in `data/usage.jsonl` (tokens, cost, outcome, including failed jobs); Settings shows
 the month's totals and recent jobs. Each generated node records which engine and model wrote it (with tokens,
 cost and time for built-in jobs) at the bottom of its side panel.
 
@@ -174,12 +174,13 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `server/src/runner.ts` | The built-in engine: claims jobs, calls the provider, runs tools, repairs invalid results |
 | `server/src/llm/` | Provider adapters on plain `fetch`: `anthropic.ts`, `openai.ts` (OpenAI-compatible) |
 | `server/src/config.ts` | Engine config (`data/config.json`), pricing and budget |
-| `server/src/usage.ts` | Token and cost ledger (`data/usage.json`) |
+| `server/src/usage.ts` | Token and cost ledger (`data/usage.jsonl`) |
 | `server/src/migrate.ts` | Schema version upgrades for stored and imported timelines |
 | `server/src/transfer.ts` | Export (timeline or branch) and import |
 | `server/test/` | Adapter contract tests and graph rule tests (`npm test`) |
 | `web/src/App.tsx` | Routes, sidebar, canvas, top bar |
-| `web/src/layout.ts`, `web/src/graph.ts` | Graph layout (dagre or time-aligned) and UI helpers over `shared/world.ts` |
+| `web/src/placement.ts`, `web/src/layout.worker.ts`, `web/src/usePlacement.ts` | Card positions (dagre or time-aligned); from 400 nodes a changed layout runs in a Web Worker |
+| `web/src/layout.ts`, `web/src/graph.ts` | Flow nodes and edges (reused when unchanged) and UI helpers over `shared/world.ts` |
 | `web/src/components/` | Side panel, forms, Turning points, Settings, Guide and About pages |
 | `web/src/mood.ts` | Tone colors and the mood-theme rules |
 | `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job |

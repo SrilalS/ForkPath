@@ -109,6 +109,25 @@ test('anthropic: tool_use round trip, cached system prompt, headers', async () =
   }
 });
 
+test('anthropic: a brief in parts caches its stable prefix on its own block', async () => {
+  const srv = await fakeServer([[200, { stop_reason: 'end_turn', content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 5, output_tokens: 1 } }]]);
+  try {
+    const s = createProvider(cfg('anthropic', srv.base)).open(opts());
+    await s.ask(['PREFIX', 'BODY']);
+    assert.deepEqual(srv.seen[0].body.messages, [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'PREFIX', cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: 'BODY', cache_control: { type: 'ephemeral' } },
+        ],
+      },
+    ]);
+  } finally {
+    await srv.close();
+  }
+});
+
 test('tool budget: after maxToolCalls the model is told to answer and tool_choice becomes none', async () => {
   const call = (id: string) => ({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id, type: 'function', function: { name: 'search_events', arguments: '{"query":"q"}' } }] } }] });
   const srv = await fakeServer([

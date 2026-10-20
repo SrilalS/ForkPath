@@ -35,8 +35,12 @@ export interface SessionOptions {
 
 /** One conversation for one job: the brief, any tool calls, and repair rounds share it. */
 export interface ChatSession {
-  /** Sends a user message, runs tool calls until the model answers in text, and returns that text. */
-  ask(text: string): Promise<string>;
+  /**
+   * Sends a user message, runs tool calls until the model answers in text, and returns that text. Given
+   * several parts, every part but the last is a stable prefix that providers with explicit caching cache on
+   * its own (shared across jobs); others just join the parts.
+   */
+  ask(text: string | string[]): Promise<string>;
   readonly usage: Usage;
 }
 

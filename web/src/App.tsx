@@ -13,6 +13,7 @@ import {
 import type { Timeline, TimelineSummary, WorkerStatus } from '../../shared/types.ts';
 import { api } from './api.ts';
 import { useLive } from './live.ts';
+import { usePlacement } from './usePlacement.ts';
 import { NODE_H, NODE_W, toFlow, type FlowNode, type LayoutMode, type TimeAxis } from './layout.ts';
 import { CanvasActionsContext, TimelineNode, WorkerOnlineContext, type CanvasActions } from './components/TimelineNode.tsx';
 import { InfluenceEdge } from './components/InfluenceEdge.tsx';
@@ -467,7 +468,8 @@ function Canvas({
   onError: (msg: string) => void;
 }) {
   const flow = useReactFlow();
-  const { nodes, edges, axis } = useMemo(() => toFlow(timeline, layoutMode), [timeline, layoutMode]);
+  const placement = usePlacement(timeline, layoutMode);
+  const { nodes, edges, axis } = useMemo(() => toFlow(timeline, layoutMode, placement), [timeline, layoutMode, placement]);
   // Only the selected card gets a new object; the rest keep theirs, so React Flow leaves them alone.
   const withSelection = useMemo(() => nodes.map((n) => (n.id === selectedId ? { ...n, selected: true } : n)), [nodes, selectedId]);
   // Kept as the same Set while its contents stay the same, so a timeline update does not re-render every card.

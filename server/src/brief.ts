@@ -50,16 +50,41 @@ function describeNode(tl: Timeline, n: TLNode, index: number, detail: Detail): s
   return lines.join('\n');
 }
 
-function chainSection(tl: Timeline, nodes: TLNode[], offset = 0): string {
-  const detail = (i: number): Detail => {
-    const fromEnd = nodes.length - i;
-    return fromEnd <= FULL_NARRATIVE_DEPTH ? 'full' : fromEnd <= SUMMARY_DEPTH ? 'summary' : 'compact';
-  };
-  const compact = nodes.length - SUMMARY_DEPTH;
+/**
+ * A chain: the last node in full, the rest with summaries, except the first `compact` (key changes only).
+ * By default everything past the last SUMMARY_DEPTH entries is compact.
+ */
+function chainSection(tl: Timeline, nodes: TLNode[], offset = 0, compact = Math.max(0, nodes.length - SUMMARY_DEPTH)): string {
+  const detail = (i: number): Detail =>
+    nodes.length - i <= FULL_NARRATIVE_DEPTH ? 'full' : i < compact ? 'compact' : 'summary';
   return [
-    ...(compact > 0 ? [`(The first ${compact} entries show key changes only. To read one in full, pass its id to show_event, or to search.mjs --node.)`] : []),
+    ...(compact > 0 ? [`(The first ${compact} entries show key changes only. ${FULL_STORY_HINT})`] : []),
     ...nodes.map((n, i) => describeNode(tl, n, i + offset, detail(i))),
   ].join('\n\n');
+}
+
+const FULL_STORY_HINT = 'To read one in full, pass its id to show_event, or to search.mjs --node.';
+
+/**
+ * How many of a storyline's oldest nodes go into the brief's cacheable prefix. It grows in steps, so the
+ * prefix stays byte-identical for ARCHIVE_STEP jobs in a row along one branch, and model APIs can serve it
+ * from cache instead of billing it again. Up to ARCHIVE_STEP - 1 compact nodes sit in the job-specific part
+ * between the prefix and the last SUMMARY_DEPTH nodes, so the brief is no longer than without a prefix.
+ * Caching only starts once the prefix passes the provider's minimum (1024 tokens for most Claude models),
+ * about 10 archived nodes.
+ */
+const ARCHIVE_STEP = 4;
+const archiveSize = (len: number) => Math.max(0, Math.floor((len - SUMMARY_DEPTH) / ARCHIVE_STEP) * ARCHIVE_STEP);
+
+/** The stable opening of a brief: the timeline name and the storyline's oldest nodes, key changes only. */
+function archiveSection(tl: Timeline, archive: TLNode[]): string {
+  return [
+    `# Timeline "${tl.title}"`,
+    '',
+    `## Earlier history of this storyline (oldest first, key changes only; it continues in the job below). ${FULL_STORY_HINT}`,
+    '',
+    archive.map((n, i) => describeNode(tl, n, i, 'compact')).join('\n\n'),
+  ].join('\n');
 }
 
 /** The part of otherId's path that is not shared with `primary` (from the fork point onward). */
@@ -409,7 +434,28 @@ const timeSpanLine = (job: Job) =>
   `Requested time span: ${job.timeSpan?.trim() || 'not specified. Choose the span that best fits the next meaningful development.'}`;
 
 export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): string {
+  const { prefix, body } = buildBriefParts(job, tl, mode);
+  return prefix ? `${prefix}\n\n---\n\n${body}` : body;
+}
+
+/**
+ * The brief in two parts. `prefix` (may be empty) holds only what is the same for every job further along
+ * this storyline, so a caching API reuses it across jobs: the runner sends it as its own block. `body` is
+ * everything specific to this job.
+ */
+export function buildBriefParts(job: Job, tl: Timeline, mode: BriefMode = 'worker'): { prefix: string; body: string } {
   const parts: string[] = [];
+  let prefix = '';
+  /** The primary storyline: its oldest nodes go into the prefix, the rest stay here (numbered on). */
+  const storyline = (chain: TLNode[]) => {
+    const k = archiveSize(chain.length);
+    if (k) prefix = archiveSection(tl, chain.slice(0, k));
+    return [
+      ...(k ? [`(Entries 1-${k} are in "Earlier history" above.)`, ''] : []),
+      // Same detail as without a prefix: nodes between the archive and the last SUMMARY_DEPTH stay compact.
+      chainSection(tl, chain.slice(k), k, Math.max(0, chain.length - SUMMARY_DEPTH - k)),
+    ].join('\n');
+  };
 
   if (job.type === 'continue') {
     const chain = pathTo(tl, job.targetNodeId);
@@ -426,7 +472,7 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       `User guidance: ${job.guidance?.trim() || 'none'}`,
       '',
       '## Timeline so far (oldest first, the last entry is the node you continue from)',
-      chainSection(tl, chain),
+      storyline(chain),
     );
     if (siblings.length) {
       parts.push(
@@ -459,7 +505,7 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       `User guidance: ${job.guidance?.trim() || 'none'}`,
       '',
       '## Branch A: the full timeline from the point of divergence (oldest first)',
-      chainSection(tl, chain),
+      storyline(chain),
       ...otherBranchSections(tl, chain, others),
       ...threadContext(
         tl,
@@ -495,7 +541,7 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
         : `User guidance: ${job.guidance?.trim() || 'none'}`,
       '',
       `## This stream so far ("${streamLabel(tl, target.id)}", oldest first, the last entry is the node you continue from)`,
-      chainSection(tl, chain),
+      storyline(chain),
       '',
       `## The influencing stream ("${source ? streamLabel(tl, source.id) : '?'}"): ` +
         `${fork ? `splits off after "${fork.title}"` : 'separate root'}, ends with the influencing event`,
@@ -532,7 +578,7 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       narrativeFormatLine(job),
       '',
       `## ${target.mergeParents?.length ? 'Branch A: timeline' : 'Timeline'} up to this node (oldest first)`,
-      chainSection(tl, chain),
+      storyline(chain),
     );
     if (target.mergeParents?.length) {
       parts.push(
@@ -549,5 +595,5 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       ...responseSection(job, tl, 'node', mode),
     );
   }
-  return parts.join('\n');
+  return { prefix, body: parts.join('\n') };
 }

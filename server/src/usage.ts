@@ -1,12 +1,15 @@
-// Token and cost ledger for the built-in engine (data/usage.json): one entry per finished job, including
-// failed ones (they cost tokens too). Feeds the monthly budget and the Settings page.
+// Token and cost ledger for the built-in engine (data/usage.jsonl): one JSON line per finished job,
+// including failed ones (they cost tokens too). Feeds the monthly budget and the Settings page.
+// Append-only, so recording a job writes one line instead of rewriting the whole ledger.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { JobType } from '../../shared/types.ts';
-import { DATA_DIR, writeJsonAtomic } from './store.ts';
+import { DATA_DIR } from './store.ts';
 
-const USAGE_FILE = path.join(DATA_DIR, 'usage.json');
-/** Older entries are dropped; month totals only need the current month. */
+const USAGE_FILE = path.join(DATA_DIR, 'usage.jsonl');
+/** The ledger before it was append-only: read once, converted, then removed. */
+const LEGACY_FILE = path.join(DATA_DIR, 'usage.json');
+/** Older entries are dropped at startup; month totals only need the current month. */
 const KEEP = 5000;
 
 export interface UsageEntry {
@@ -23,18 +26,49 @@ export interface UsageEntry {
   durationMs: number;
 }
 
-let entries: UsageEntry[] = [];
-try {
-  entries = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
-  if (!Array.isArray(entries)) entries = [];
-} catch {
-  // first run
+const line = (e: UsageEntry) => `${JSON.stringify(e)}\n`;
+
+/** Writes the whole ledger (temp file + rename), for conversion and trimming only. */
+function rewrite(list: UsageEntry[]) {
+  const tmp = `${USAGE_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, list.map(line).join(''));
+  fs.renameSync(tmp, USAGE_FILE);
 }
+
+function load(): UsageEntry[] {
+  if (fs.existsSync(USAGE_FILE)) {
+    // A line cut off by a crash mid-append is skipped; every other line still counts.
+    return fs
+      .readFileSync(USAGE_FILE, 'utf8')
+      .split('\n')
+      .flatMap((l) => {
+        try {
+          return l.trim() ? [JSON.parse(l) as UsageEntry] : [];
+        } catch {
+          return [];
+        }
+      });
+  }
+  if (!fs.existsSync(LEGACY_FILE)) return []; // first run
+  try {
+    const old = JSON.parse(fs.readFileSync(LEGACY_FILE, 'utf8'));
+    const list = Array.isArray(old) ? (old as UsageEntry[]) : [];
+    rewrite(list);
+    fs.rmSync(LEGACY_FILE, { force: true });
+    console.log(`[usage] converted usage.json to usage.jsonl (${list.length} entries)`);
+    return list;
+  } catch (err) {
+    console.error('[usage] could not read usage.json:', err);
+    return [];
+  }
+}
+
+let entries = load();
+if (entries.length > KEEP) rewrite((entries = entries.slice(-KEEP)));
 
 export function recordUsage(e: UsageEntry) {
   entries.push(e);
-  if (entries.length > KEEP) entries = entries.slice(-KEEP);
-  writeJsonAtomic(USAGE_FILE, entries);
+  fs.appendFileSync(USAGE_FILE, line(e));
 }
 
 const monthKey = (iso: string) => iso.slice(0, 7); // "2026-10" (UTC)
