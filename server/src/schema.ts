@@ -40,11 +40,31 @@ const nodeContent = {
 /** The first node of a new parallel thread (nested in a child, or top-level from the node being continued). */
 export const threadStart = z.object({ thread: text(80), ...nodeContent, ...links });
 
+/**
+ * "This node's immediate consequences in another stream deserve their own event": the server queues an
+ * INFLUENCE job (this node -> a new event after `target`), handled by another writer.
+ */
+const followUp = z.object({
+  /** The latest event of another stream (marked "latest in stream" in the brief or search results). */
+  target: z.string().trim().min(1).max(41),
+  strength: z.enum(STRENGTHS),
+  /** What the follow-up writer should show: the consequence to explore. */
+  guidance: z.string().trim().min(1).max(600),
+});
+
+/** At most this many follow-ups per result. */
+export const MAX_FOLLOW_UPS = 2;
+
+/** Renames the stream from this node on, when its focus has clearly moved on from its current name. */
+const streamName = z.string().trim().min(1).max(80).optional();
+
 export const generatedNode = z.object({
   ...nodeContent,
+  streamName,
   likelihood: z.number().gt(0).lte(1).optional(),
   ...links,
   spawnThreads: z.array(threadStart).max(2).optional(),
+  followUps: z.array(followUp).max(MAX_FOLLOW_UPS).optional(),
 });
 
 export const continueResult = z
@@ -65,6 +85,10 @@ export const continueResult = z
       .map((n) => n.key)
       .filter(Boolean);
     if (new Set(keys).size !== keys.length) ctx.addIssue({ code: 'custom', path: ['key'], message: 'keys must be unique' });
+    const followUps = val.children.reduce((n, c) => n + (c.followUps?.length ?? 0), 0);
+    if (followUps > MAX_FOLLOW_UPS) {
+      ctx.addIssue({ code: 'custom', path: ['children'], message: `at most ${MAX_FOLLOW_UPS} followUps in one result, across all children` });
+    }
     if (val.children.length < 2) return;
     if (!val.branchReason) {
       ctx.addIssue({ code: 'custom', path: ['branchReason'], message: 'required when returning 2-4 children' });
@@ -76,7 +100,7 @@ export const continueResult = z
     });
   });
 
-export const regenerateResult = z.object({ node: z.object({ ...nodeContent, ...links }) });
+export const regenerateResult = z.object({ node: z.object({ ...nodeContent, streamName, ...links }) });
 
 export type LinkRef = z.infer<typeof linkRef>;
 
@@ -106,6 +130,8 @@ export const nodeEdit = z.object({
   keyChanges: z.array(z.string().trim().min(1).max(300)).max(15).optional(),
   significance: significance.optional(),
   tone: tone.optional(),
+  /** Renames the stream from this node on; '' removes the rename. */
+  streamName: z.string().trim().max(80).optional(),
 });
 
 export const generateOptions = z.object({

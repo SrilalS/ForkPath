@@ -147,7 +147,8 @@ export function GuidePage() {
           </Term>
           <Term name="Thread" sample={<span className="tl-chip tl-chip--thread">🧵 Thread</span>}>
             A parallel storyline that happens alongside the others, with its own color, such as a neighboring country&apos;s
-            politics or a space program.
+            politics or a space program. When a stream&apos;s story moves on, rename it from any later card with{' '}
+            <strong>Edit</strong> (&quot;Stream name from here on&quot;); the model can do the same. The color stays.
           </Term>
           <Term name="Convergence" sample={<span className="tl-chip tl-chip--merge">Convergence</span>}>
             A card with two or more parents, joined by teal dotted lines: the point where separate storylines meet (made with
@@ -268,6 +269,11 @@ export function GuidePage() {
             new event can influence existing events at most {INFLUENCE_WINDOW_YEARS} years ahead.
           </li>
           <li>
+            <strong>Follow-ups go one level deep.</strong> When a new event hits another stream hard, the model can ask for up to
+            2 follow-up events there (added after that stream&apos;s latest event, with an arrow from the cause). They generate on
+            their own and can be cancelled like any placeholder. A follow-up never requests more follow-ups.
+          </li>
+          <li>
             <strong>Your edits are canon.</strong> Anything you wrote or edited is treated as fact by every later generation.
           </li>
         </ul>
@@ -275,8 +281,9 @@ export function GuidePage() {
 
       <Section id="worker" icon="🤖" title="The worker">
         <p>
-          There is no API key. A separate <strong>Claude Code session</strong> acts as the model: it waits for jobs, reads a brief
-          (the history so far, your guidance, nearby events), writes the result and submits it. The sidebar card shows its state:
+          There is no API key. A separate <strong>Claude Code session</strong> acts as the model. It waits for jobs and hands
+          each one to a fresh <strong>writer subagent</strong>, which reads the brief (the history so far, your guidance, nearby
+          events), writes the result and submits it. Up to 3 jobs run at once. The sidebar card shows its state:
         </p>
         <div className="doc__terms">
           <Term name="Worker online" sample={<span className="dot dot--on" />}>

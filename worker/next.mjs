@@ -4,11 +4,13 @@
 //   node worker/next.mjs              wait up to 540s for a job
 //   node worker/next.mjs --wait 60    wait up to 60s
 //   node worker/next.mjs --job <id>   re-print the brief for a job you already claimed
+//   node worker/next.mjs --id-only    claim a job but print only its id and type (the dispatcher hands
+//                                     the job to a subagent, which reads the brief with --job <id>)
 //
 // Output starts with one of these markers on the first line:
-//   JOB <id>       a job was claimed; the brief follows
-//   NO_JOB         nothing arrived in time; run this again
-//   SERVER_DOWN    backend not reachable; check `npm run dev` is running, then run this again
+//   JOB <id> <TYPE>  a job was claimed; the brief follows (unless --id-only)
+//   NO_JOB           nothing arrived in time; run this again
+//   SERVER_DOWN      backend not reachable; check `npm run dev` is running, then run this again
 
 const BASE = process.env.ALTHISTORY_URL ?? 'http://localhost:5174';
 const args = process.argv.slice(2);
@@ -18,11 +20,14 @@ const opt = (name) => {
 };
 const waitS = Math.min(Number(opt('--wait') ?? 540), 590);
 const jobId = opt('--job');
+const idOnly = args.includes('--id-only');
 const deadline = Date.now() + waitS * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function print(payload) {
-  console.log(`JOB ${payload.job.id}\n`);
+  const head = `JOB ${payload.job.id} ${payload.job.type.toUpperCase()}`;
+  if (idOnly) return console.log(head);
+  console.log(`${head}\n`);
   console.log(payload.brief);
 }
 

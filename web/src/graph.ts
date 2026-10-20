@@ -1,7 +1,7 @@
 import type { Timeline } from '../../shared/types.ts';
-import { ancestorIds, canLink, childrenOf, parentIds, threadLabel, threadRootOf, WorldIndex } from '../../shared/world.ts';
+import { ancestorIds, canLink, childrenOf, parentIds, streamLabel, streamNameOf, threadLabel, threadRootOf, WorldIndex } from '../../shared/world.ts';
 
-export { ancestorIds, canLink, childrenOf, threadLabel, threadRootOf };
+export { ancestorIds, canLink, childrenOf, streamLabel, streamNameOf, threadLabel, threadRootOf };
 export const parentIdsOf = parentIds;
 
 export function descendantIds(tl: Timeline, id: string, ix = new WorldIndex(tl)): Set<string> {

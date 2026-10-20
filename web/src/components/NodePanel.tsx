@@ -4,7 +4,18 @@ import { api, type GenerateOptions } from '../api.ts';
 import { GenerateOptionsFields } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
-import { childrenOf, descendantIds, influenceTargets, mergeTargets, parentIdsOf, threadColors, threadLabel, threadRootOf } from '../graph.ts';
+import {
+  childrenOf,
+  descendantIds,
+  influenceTargets,
+  mergeTargets,
+  parentIdsOf,
+  streamLabel,
+  streamNameOf,
+  threadColors,
+  threadLabel,
+  threadRootOf,
+} from '../graph.ts';
 
 export const PANEL_DEFAULT = 440;
 
@@ -63,8 +74,10 @@ export function NodePanel({
   // Thread starts are parallel storylines, not continuations of this one.
   const primaryChildren = children.filter((c) => c.parentId === node.id && !c.threadName).length;
   const threadRoot = threadRootOf(timeline, node.id);
-  const threadName = threadLabel(timeline, threadRoot);
-  const threadColor = threadColors(timeline).get(threadRoot);
+  const threadName = streamNameOf(timeline, node.id) ?? threadLabel(timeline, threadRoot);
+  const threadColor = threadColors(timeline).get(threadRoot) ?? (streamNameOf(timeline, node.id) ? '#9aa7c2' : undefined);
+  /** The name this node's stream has before any rename on this node itself (shown as the edit placeholder). */
+  const inheritedStream = node.parentId ? streamLabel(timeline, node.parentId) : 'Main';
   const incoming = (timeline.links ?? []).filter((l) => l.to === node.id && timeline.nodes[l.from]);
   const outgoing = (timeline.links ?? []).filter((l) => l.from === node.id && timeline.nodes[l.to]);
 
@@ -147,6 +160,7 @@ export function NodePanel({
         {mode === 'edit' ? (
           <EditForm
             node={node}
+            inheritedStream={inheritedStream}
             descendants={descendants}
             busy={busy}
             onCancel={() => setMode('view')}
@@ -278,7 +292,7 @@ export function NodePanel({
                             <span className="link__dir">{dir === 'in' ? '⇠ Shaped by' : '⇢ Shapes'}</span>
                             <span className={`link__strength link__strength--${l.strength}`}>{l.strength}</span>
                             <strong>{o.title}</strong>
-                            <span className="muted small"> · {threadLabel(timeline, threadRootOf(timeline, o.id))}</span>
+                            <span className="muted small"> · {streamLabel(timeline, o.id)}</span>
                             {l.note && <span className="link__note">{l.note}</span>}
                           </button>
                           <button
@@ -494,12 +508,15 @@ function ContinueForm({
 
 function EditForm({
   node,
+  inheritedStream,
   descendants,
   busy,
   onCancel,
   onSave,
 }: {
   node: TLNode;
+  /** The stream's name coming into this node, before any rename here. */
+  inheritedStream: string;
   descendants: number;
   busy: boolean;
   onCancel: () => void;
@@ -512,6 +529,7 @@ function EditForm({
   const [changes, setChanges] = useState(node.keyChanges.join('\n'));
   const [significance, setSignificance] = useState<Significance>(node.significance);
   const [tone, setTone] = useState<Tone>(node.tone);
+  const [streamName, setStreamName] = useState(node.streamName ?? '');
 
   return (
     <form
@@ -526,6 +544,8 @@ function EditForm({
           keyChanges: changes.split('\n').map((s) => s.trim()).filter(Boolean),
           significance,
           tone,
+          // '' clears a rename (the server drops the field).
+          streamName: streamName.trim(),
         });
       }}
     >
@@ -563,6 +583,15 @@ function EditForm({
             </select>
           </label>
         </div>
+      )}
+      {node.parentId && (
+        <label className="field">
+          <span className="field__label">
+            Stream name from here on <em>optional</em>
+          </span>
+          <input value={streamName} placeholder={inheritedStream} maxLength={80} onChange={(e) => setStreamName(e.target.value)} />
+          <span className="field__hint">Renames this stream for this node and everything after it, when its focus has moved on. Leave empty to keep "{inheritedStream}".</span>
+        </label>
       )}
       <label className="field">
         <span className="field__label">Summary</span>

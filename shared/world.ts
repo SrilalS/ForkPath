@@ -49,13 +49,28 @@ export function threadLabel(tl: Timeline, threadRootId: string): string {
 }
 
 /**
- * A readable name for the stream `id` is in: the nearest thread name, or the title of the nearest user
- * branch (a deviation below the root), or "Main".
+ * The current name of the stream at `id`: the nearest rename (streamName) or thread name on the way back
+ * along primary parents. Undefined on a stream that was never named (the main line, or a plain branch).
+ */
+export function streamNameOf(tl: Timeline, id: string): string | undefined {
+  let cur: TLNode | undefined = tl.nodes[id];
+  while (cur) {
+    if (cur.streamName) return cur.streamName;
+    if (cur.threadName) return cur.threadName;
+    cur = cur.parentId ? tl.nodes[cur.parentId] : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * A readable name for the stream `id` is in: the nearest rename or thread name, or the title of the nearest
+ * user branch (a deviation below the root), or "Main".
  */
 export function streamLabel(tl: Timeline, id: string): string {
   const clip = (s: string) => (s.length > 48 ? `${s.slice(0, 45)}...` : s);
   let cur: TLNode | undefined = tl.nodes[id];
   while (cur) {
+    if (cur.streamName) return clip(cur.streamName);
     if (cur.threadName) return clip(cur.threadName);
     if (cur.kind === 'deviation' && cur.parentId) return clip(cur.title);
     cur = cur.parentId ? tl.nodes[cur.parentId] : undefined;
@@ -120,6 +135,15 @@ export class WorldIndex {
       }
     }
     return out;
+  }
+
+  /**
+   * True when `id` is the latest event of its stream: nothing continues it yet (thread starts and
+   * convergences that merge it in do not count). A new event after a tip extends that stream instead of
+   * becoming an alternative to what is already there.
+   */
+  isTip(id: string): boolean {
+    return !this.children(id).some((c) => c.parentId === id && !c.threadName);
   }
 
   /** True when `n` is one of several exclusive alternatives at its fork. */

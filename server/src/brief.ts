@@ -4,11 +4,10 @@ import {
   INFLUENCE_WINDOW_YEARS,
   startYear,
   streamLabel,
-  threadLabel,
-  threadRootOf,
   WorldIndex,
 } from '../../shared/world.ts';
 import { childrenOf, pathTo } from './store.ts';
+import { MAX_FOLLOW_UPS } from './schema.ts';
 
 /** Ancestors this close to the target get their full narrative; older ones only the summary. */
 const FULL_NARRATIVE_DEPTH = 3;
@@ -97,7 +96,7 @@ function threadContext(
       const f = tl.nodes[l.from];
       const t = tl.nodes[l.to];
       out.push(
-        `- ${short(f)} in thread "${threadLabel(tl, threadRootOf(tl, f.id))}" --${l.strength}--> ${short(t)}${l.note ? `: ${l.note}` : ''}`,
+        `- ${short(f)} in stream "${streamLabel(tl, f.id)}" --${l.strength}--> ${short(t)}${l.note ? `: ${l.note}` : ''}`,
       );
       // The far end of an incoming link is outside this chain, so give its content.
       if (!inChain.has(f.id)) out.push(`  ${f.summary}`);
@@ -113,9 +112,11 @@ function threadContext(
       'Where there is a real causal effect, link it: "influencedBy" for events that act on yours, "influences" for events yours acts on. ' +
         'Most nodes need 0-2 links. For older events (or ones not listed), search: see "Finding other events" below.',
     );
+    const ix = new WorldIndex(tl);
     for (const { node, gap } of nearby) {
       const when = gap === 0 ? 'same year' : gap < 0 ? `${-gap}y earlier` : `${gap}y later`;
-      out.push(`- [${streamLabel(tl, node.id)}, ${when}] ${short(node)}: ${firstSentence(node.summary)}`);
+      const tip = ix.isTip(node.id) ? ', latest in stream' : '';
+      out.push(`- [${streamLabel(tl, node.id)}, ${when}${tip}] ${short(node)}: ${firstSentence(node.summary)}`);
     }
   }
   return out;
@@ -179,7 +180,7 @@ export function jobScope(tl: Timeline, job: Job): { anchor: TLNode; anchorYear: 
   };
 }
 
-/** Target share of each significance (matches the table in WORKER.md). */
+/** Target share of each significance (matches the table in .claude/agents/althistory-writer.md). */
 const SIGNIFICANCE_TARGET: Record<Significance, number> = { minor: 0.2, notable: 0.55, major: 0.2, pivotal: 0.05 };
 /** Rated events needed before the mix means anything. */
 const CALIBRATION_MIN = 5;
@@ -233,8 +234,10 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
     FIELD_HINT,
     ...calibrationLines(tl, shape === 'node' ? job.targetNodeId : (job.placeholderId ?? '')),
     linkHint,
+    streamNameHint(tl, job, shape),
   ];
   if (shape === 'node') return [...lines, 'Regenerate never branches: return exactly one node.'];
+  lines.push(...followUpLines(job));
   if (job.type === 'influence') {
     return [
       ...lines,
@@ -245,12 +248,38 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
   }
   return [
     ...lines,
-    'Pick the structure (details in WORKER.md "4b"):',
+    'Pick the structure (details in your instructions, section "4b"):',
     '- "children": ALTERNATIVES, only one happens. One child normally; 2-4 only when outcomes are genuinely uncertain, then add likelihoods and branchReason.',
     '- "threads" (top level): PARALLEL storylines that ALL happen, starting from this node, each { "thread": "<name>", "key": "...", ...node fields }. ' +
       'Use these when the user asks for separate branches/streams by region or topic that run at the same time; link them to each other with "@key".',
     '- "spawnThreads" (inside a child): a parallel storyline set off BY that child. Usually none.',
     'You may combine them (e.g. no children and two threads), but give at least one child or one thread.',
+  ];
+}
+
+/** Lets the writer rename the stream when the story has moved on from its current name. */
+function streamNameHint(tl: Timeline, job: Job, shape: 'children' | 'node'): string {
+  const target = tl.nodes[job.targetNodeId];
+  // A regenerated node is named by what comes before it; a new node by the node it follows.
+  const from = shape === 'node' ? target?.parentId : job.targetNodeId;
+  const current = from ? streamLabel(tl, from) : 'Main';
+  return (
+    `This stream is currently named "${current}". If your node moves its focus so far that the name no longer fits ` +
+    '(a "Vietnam War" stream that is now about Iran), add "streamName": "<short new name>" to it; it renames the stream ' +
+    'from your node on. Rarely needed; never for a small shift.'
+  );
+}
+
+/** How the writer asks for follow-ups, or why it cannot (a follow-up job never requests more). */
+function followUpLines(job: Job): string[] {
+  if (job.followUpDepth) {
+    return ['This job is itself a follow-up another writer requested: do not add "followUps".'];
+  }
+  return [
+    `Optional on a child: "followUps": [ { "target": "<id>", "strength": "moderate", "guidance": "<the consequence to show>" } ] (at most ${MAX_FOLLOW_UPS} per result). ` +
+      'Each one makes another writer add a NEW event to a different stream, right after `target`, showing the immediate consequence of your child there. ' +
+      '`target` must be marked "latest in stream" in the nearby list or a search result. ' +
+      'Use it only when the consequence there is big enough for its own event; for a smaller effect, link with "influences" instead. Most results need none.',
   ];
 }
 
@@ -292,7 +321,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
     const target = tl.nodes[job.targetNodeId];
     parts.push(
       '',
-      `You are writing in thread "${threadLabel(tl, threadRootOf(tl, target.id))}".`,
+      `You are writing in stream "${streamLabel(tl, target.id)}".`,
       ...threadContext(tl, chain, target, new Set([job.placeholderId ?? ''])),
       ...responseSection(job, tl, 'children'),
     );
@@ -335,15 +364,18 @@ export function buildBrief(job: Job, tl: Timeline): string {
       `Timeline: "${tl.title}"`,
       `Task: an event in another stream, "${source?.title}" (${source?.period || 'no date'}), affects this stream. ` +
         `Write what happens NEXT in this stream, after node ${chain.length} ("${target.title}"), showing that effect.`,
-      `Strength set by the user: ${strength} (${STRENGTH_MEANING[strength]}). The effect must be visible in the title or summary, and explained in the narrative.`,
+      `Strength set by the ${job.followUpDepth ? 'writer who requested this follow-up' : 'user'}: ${strength} (${STRENGTH_MEANING[strength]}). ` +
+        'The effect must be visible in the title or summary, and explained in the narrative.',
       'Both events happened in the same world. The new node starts no earlier than either of them.',
       timeSpanLine(job),
-      `User guidance: ${job.guidance?.trim() || 'none'}`,
+      job.followUpDepth
+        ? `Guidance from the writer who requested this follow-up: ${job.guidance?.trim() || 'none'}`
+        : `User guidance: ${job.guidance?.trim() || 'none'}`,
       '',
-      `## This stream so far (thread "${threadLabel(tl, threadRootOf(tl, target.id))}", oldest first, the last entry is the node you continue from)`,
+      `## This stream so far ("${streamLabel(tl, target.id)}", oldest first, the last entry is the node you continue from)`,
       chainSection(tl, chain),
       '',
-      `## The influencing stream (thread "${source ? threadLabel(tl, threadRootOf(tl, source.id)) : '?'}"): ` +
+      `## The influencing stream ("${source ? streamLabel(tl, source.id) : '?'}"): ` +
         `${fork ? `splits off after "${fork.title}"` : 'separate root'}, ends with the influencing event`,
       chainSection(tl, nodes, offset),
     );

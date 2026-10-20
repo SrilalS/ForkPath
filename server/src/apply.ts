@@ -16,6 +16,8 @@ export interface ApplyReport {
   links: number;
   /** Links the model asked for that were invalid, with the reason; the rest of the result still applies. */
   dropped: string[];
+  /** Follow-ups the model asked for, from a node it wrote; the caller validates and queues them. */
+  followUps: { source: string; target: string; strength: Strength; guidance: string }[];
 }
 
 /** Adds a link if the link rules (separate streams, one world, time window) allow it. Returns the reason when they do not. */
@@ -112,7 +114,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
   const mergeParents = job.type === 'merge' ? (job.mergeWith ?? []).filter((id) => tl.nodes[id]) : undefined;
   const branching = result.children.length > 1;
   const total = result.children.reduce((s, c) => s + (c.likelihood ?? 0), 0) || 1;
-  const report: ApplyReport = { created: [], links: 0, dropped: [] };
+  const report: ApplyReport = { created: [], links: 0, dropped: [], followUps: [] };
   const pendingLinks: [string, ContinueResult['children'][number] | ThreadStart][] = [];
   const keys = new Map<string, string>();
   /** The waiting placeholder becomes the first node written directly under the target. */
@@ -130,11 +132,13 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
     const node = nextUnderTarget();
     fill(node, c, ts);
     remember(node, c);
+    if (c.streamName) node.streamName = c.streamName;
     node.likelihood = branching ? (c.likelihood ?? 0) / total : undefined;
     node.branchReason = branching ? result.branchReason : undefined;
     tl.nodes[node.id] = node;
     report.created.push({ id: node.id, title: node.title });
     pendingLinks.push([node.id, c]);
+    for (const f of c.followUps ?? []) report.followUps.push({ source: node.id, ...f });
 
     for (const t of c.spawnThreads ?? []) {
       const start = makeNode({ parentId: node.id, kind: 'event', source: 'llm', threadName: t.thread });
@@ -164,18 +168,21 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
   const from = job.type === 'influence' ? job.influenceFrom : undefined;
   if (from && tl.nodes[from]) {
     const strength = tl.links.find((l) => l.from === from && l.to === job.placeholderId)?.strength ?? 'moderate';
-    for (const c of report.created.filter((c) => !c.thread)) putLink(tl, from, c.id, strength, result.influenceNote ?? '', 'user');
+    // A follow-up's arrow was asked for by the model, a user influence's by the user.
+    const linkSource = job.followUpDepth ? 'llm' : 'user';
+    for (const c of report.created.filter((c) => !c.thread)) putLink(tl, from, c.id, strength, result.influenceNote ?? '', linkSource);
   }
   for (const [id, refs] of pendingLinks) applyLinkRefs(tl, id, refs, report, keys, ix);
   return report;
 }
 
 export function applyRegenerate(tl: Timeline, node: TLNode, result: RegenerateResult): ApplyReport {
-  const { influences, influencedBy, ...content } = result.node;
+  const { influences, influencedBy, streamName, ...content } = result.node;
   fill(node, content, now());
+  if (streamName) node.streamName = streamName; // a rename stays unless the writer gives a new one
   node.source = 'llm';
   markStaleFrom(tl, node.id);
-  const report: ApplyReport = { created: [], links: 0, dropped: [] };
+  const report: ApplyReport = { created: [], links: 0, dropped: [], followUps: [] };
   applyLinkRefs(tl, node.id, { influences, influencedBy }, report);
   return report;
 }

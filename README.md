@@ -4,17 +4,19 @@ A branching alternate-history modeler. You describe a point of divergence, and a
 happens next, node by node. You can edit any node, continue from it, or branch off with a new deviation. The model
 branches on its own when outcomes are genuinely uncertain.
 
-There is no API key. The language model is a **Claude Code session** that polls the backend for jobs and writes
-the results back.
+There is no API key. The language model is a **Claude Code session** (the dispatcher) that polls the backend
+for jobs and hands each one to a fresh **`althistory-writer` subagent**, which writes the result back. Each job
+starts with a clean context, so the dispatcher stays small and up to 3 jobs run at once.
 
 ```
- Browser (React Flow UI)          Backend (Express, :5174)              Claude Code worker session
- ───────────────────────          ────────────────────────              ──────────────────────────
- click Continue        ──POST──▶  placeholder node + job queued
-                                  GET /api/worker/next (long poll) ◀── node worker/next.mjs
-                                  ── job brief (markdown) ────────────▶ writes worker/out/<id>.json
-                                  POST /api/worker/jobs/<id>/result ◀── node worker/submit.mjs <id>
- node appears live     ◀──SSE──   validate, apply, broadcast
+ Browser (React Flow UI)        Backend (Express, :5174)              Dispatcher session    Writer subagent (per job)
+ ───────────────────────        ────────────────────────              ──────────────────    ─────────────────────────
+ click Continue      ──POST──▶  placeholder node + job queued
+                                GET /api/worker/next (long poll) ◀── next.mjs --id-only
+                                                                     JOB <id> ──spawn──▶  next.mjs --job <id> (brief)
+                                GET .../search                  ◀───────────────────────  search.mjs (optional)
+                                POST .../jobs/<id>/result       ◀───────────────────────  writes out/<id>.json, submit.mjs
+ node appears live   ◀──SSE──   validate, apply, broadcast            one-line report ◀──
 ```
 
 ## Quick start
@@ -37,6 +39,7 @@ the results back.
    > it running until I tell you to stop.
 
    The sidebar shows **Worker online** while it is polling. Jobs created while it is offline wait in the queue.
+   Restart the worker session after updating the app, so it loads the current `WORKER.md` and subagent.
 
 `.claude/settings.json` pre-approves the worker commands (next, submit, search) and writes to `worker/out/`, so the worker session
 does not stop for permission prompts.
@@ -53,7 +56,7 @@ does not stop for permission prompts.
 | ♻️ Stale nodes | **Regenerate** (model rewrites it to fit), **Keep**, or **Keep whole branch** |
 
 | 🧵 Threads | A **parallel thread** is a separate storyline in the same world (not an alternative). The LLM spawns one when an event sets off a related stream worth tracking on its own; you can start one with **Branch here** then **Parallel thread** |
-| ⇢ Influence | **Influence...** on a node, click 1-4 highlighted nodes in other streams, then **Influence N** in the banner. Pick a strength and optional time span and guidance; the model writes a new event after each picked node, shaped by the first one, and draws a dotted orange arrow to it. Like Merge, separate branches count as streams of one world. The new event cannot start before either node. The LLM also checks every node it writes against nearby events in other streams (within 15 years, `INFLUENCE_WINDOW_YEARS` in `shared/world.ts`), can search older ones (`worker/search.mjs`, old hits show only their key changes), and adds arrows where there is a real effect; it never links model-made alternatives that exclude each other. Remove arrows in the side panel. Editing a node marks the nodes it influences stale |
+| ⇢ Influence | **Influence...** on a node, click 1-4 highlighted nodes in other streams, then **Influence N** in the banner. Pick a strength and optional time span and guidance; the model writes a new event after each picked node, shaped by the first one, and draws a dotted orange arrow to it. Like Merge, separate branches count as streams of one world. The new event cannot start before either node. The LLM also checks every node it writes against nearby events in other streams (within 15 years, `INFLUENCE_WINDOW_YEARS` in `shared/world.ts`), can search older ones (`worker/search.mjs`, old hits show only their key changes), and adds arrows where there is a real effect; it never links model-made alternatives that exclude each other. When an event hits another stream hard, the model can request up to 2 **follow-ups**: INFLUENCE jobs that add an event after that stream's latest one, run by parallel writers. Follow-ups cannot request more. Remove arrows in the side panel. Editing a node marks the nodes it influences stale |
 | ⤚⤙ Merge | **Merge with...** on a node, click 1-4 highlighted nodes on separate branches, then **Merge N** in the banner. The model writes where the two storylines meet (same world, Branch A wins conflicts unless your guidance says otherwise) |
 | ◷ Align by time | Top-bar toggle. Columns are ordered by each node's start date (parsed from its period), so events in different branches line up. Undated nodes sit just after their parent. Remembered per timeline |
 | 📖 Guide, About | Sidebar links (`#/guide`, `#/about`). The Guide explains every concept and action on screen |
@@ -77,7 +80,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 
 - On startup, older files in `data/timelines/` are upgraded in place. The original is kept as `<id>.v<N>.bak.json`.
 - Imports run the same migrations, so old exports always open.
-- Current version: **v4** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links).
+- Current version: **v5** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links, v5 added stream renames `streamName`).
 - A file from a newer app version is rejected with a clear message instead of being half-loaded.
 - To change the format: bump `SCHEMA_VERSION` and add a step in `server/src/migrate.ts` keyed by the old version.
 
@@ -96,7 +99,8 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `web/src/mood.ts` | Tone colors and the mood-theme rules |
 | `web/src/` | React UI (React Flow canvas, dagre layout, side panel) |
 | `shared/types.ts` | Types used by both sides |
-| `worker/WORKER.md` | The worker's instructions: loop, writing rules, when to branch, JSON shape |
+| `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job, fallback |
+| `.claude/agents/althistory-writer.md` | The writer subagent: writing rules, when to branch, links, JSON shapes |
 | `worker/next.mjs`, `worker/submit.mjs` | The worker's job loop commands |
 | `worker/search.mjs`, `server/src/search.ts` | Keyword search the worker uses to find older events that may influence a node |
 | `data/` | Timelines (`timelines/*.json`) and the job queue (`jobs.json`). Delete it to start fresh |

@@ -24,6 +24,8 @@ const steps: Record<number, (tl: Raw) => Raw> = {
     tl.links ??= [];
     return tl;
   },
+  // v4 -> v5: optional node streamName (a stream rename). Nothing to fill in.
+  4: (tl) => tl,
 };
 
 export class MigrationError extends Error {}
@@ -74,6 +76,11 @@ function sanitize(tl: Raw) {
       const name = typeof n.threadName === 'string' ? n.threadName.trim().slice(0, 80) : '';
       if (name && n.parentId) n.threadName = name;
       else delete n.threadName;
+    }
+    if (n.streamName !== undefined) {
+      const name = typeof n.streamName === 'string' ? n.streamName.trim().slice(0, 80) : '';
+      if (name) n.streamName = name;
+      else delete n.streamName;
     }
   }
   tl.links = (Array.isArray(tl.links) ? tl.links : []).filter(

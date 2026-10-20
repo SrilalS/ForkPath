@@ -2,7 +2,7 @@
 // that may influence the node, however old. Output is plain text sized for a model's context: events older
 // than the influence window show only their key changes, which is what an old event leaves behind.
 import type { Job, Timeline, TLNode } from '../../shared/types.ts';
-import { INFLUENCE_WINDOW_YEARS, startYear, streamLabel } from '../../shared/world.ts';
+import { INFLUENCE_WINDOW_YEARS, startYear, streamLabel, WorldIndex } from '../../shared/world.ts';
 import { jobScope, linkCandidates, type Candidate } from './brief.ts';
 
 export const SEARCH_DEFAULT_LIMIT = 6;
@@ -43,8 +43,9 @@ function score(n: TLNode, words: string[]): number {
 
 const when = (gap: number | null) => (gap === null ? 'undated' : gap === 0 ? 'same year' : gap < 0 ? `${-gap}y earlier` : `${gap}y later`);
 
-function formatHit(tl: Timeline, { node, gap }: Candidate): string {
-  const head = `- [${streamLabel(tl, node.id)}, ${when(gap)}] "${node.title}" (${node.period || 'no date'}) [id: ${node.id}]`;
+function formatHit(tl: Timeline, ix: WorldIndex, { node, gap }: Candidate): string {
+  const tip = ix.isTip(node.id) ? ', latest in stream' : '';
+  const head = `- [${streamLabel(tl, node.id)}, ${when(gap)}${tip}] "${node.title}" (${node.period || 'no date'}) [id: ${node.id}]`;
   // An old event matters through what it changed; its summary and narrative are detail.
   if (gap !== null && gap < -INFLUENCE_WINDOW_YEARS) return `${head}\n  Key changes: ${node.keyChanges.join('; ') || '(none)'}`;
   return `${head}\n  ${node.summary}`;
@@ -81,9 +82,10 @@ export function searchForJob(tl: Timeline, job: Job, opts: SearchOptions): strin
     return `NO_RESULTS for ${label} among ${pool.length} linkable events. Try fewer or different keywords.`;
   }
   const shown = ranked.slice(0, limit);
+  const ix = new WorldIndex(tl);
   return [
     `RESULTS for ${label}: ${shown.length} of ${ranked.length} matches (anchor year ${scope.anchorYear ?? 'unknown'})`,
-    ...shown.map((x) => formatHit(tl, x.c)),
+    ...shown.map((x) => formatHit(tl, ix, x.c)),
   ].join('\n');
 }
 

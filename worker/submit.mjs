@@ -51,6 +51,8 @@ async function main() {
     const nodes = data.created?.length ? data.created : data.updated;
     console.log(`OK ${JSON.stringify(nodes)}${data.links ? ` (+${data.links} link${data.links > 1 ? 's' : ''})` : ''}`);
     for (const d of data.dropped ?? []) console.log(`  dropped link: ${d}`);
+    for (const f of data.followUps?.queued ?? []) console.log(`  follow-up queued: ${f.id} in stream "${f.stream}"`);
+    for (const s of data.followUps?.skipped ?? []) console.log(`  follow-up skipped: ${s}`);
     fs.rmSync(file, { force: true });
   } else if (status === 400) {
     console.log(`INVALID\n${data.error}`);

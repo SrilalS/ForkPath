@@ -7,8 +7,9 @@
  *   2: adds schemaVersion, node significance and tone
  *   3: adds node mergeParents (convergence of separate branches)
  *   4: adds parallel threads (node threadName) and timeline influence links
+ *   5: adds node streamName (renames a stream from that node onward)
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export type NodeKind = 'deviation' | 'event';
 export type NodeSource = 'user' | 'llm' | 'llm-edited';
@@ -45,6 +46,11 @@ export interface TLNode {
    * parent, not an alternative to its siblings. Its descendants belong to the thread until the next one.
    */
   threadName?: string;
+  /**
+   * Renames the stream from this node onward, when its focus has moved on (a "Vietnam War" thread that is
+   * now about Iran). Only a label: unlike threadName it starts nothing new and keeps the stream's color.
+   */
+  streamName?: string;
   kind: NodeKind;
   source: NodeSource;
   status: NodeStatus;
@@ -127,6 +133,8 @@ export interface Job {
   mergeWith?: string[];
   /** influence: the event (in another stream) whose effect the new node after targetNodeId shows. */
   influenceFrom?: string;
+  /** Set on INFLUENCE jobs a writer requested as a follow-up (1); such jobs cannot request more. */
+  followUpDepth?: number;
   timeSpan?: string;
   guidance?: string;
   status: JobStatus;

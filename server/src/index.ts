@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
-import { SCHEMA_VERSION, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
-import { WorldIndex } from '../../shared/world.ts';
+import { SCHEMA_VERSION, type Job, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
+import { streamLabel, WorldIndex } from '../../shared/world.ts';
 import { buildExport, exportFileName, importFile } from './transfer.ts';
 import { MigrationError } from './migrate.ts';
 import {
@@ -35,6 +35,7 @@ import {
   addLink,
   applyContinue,
   applyRegenerate,
+  type ApplyReport,
   chronologyIssues,
   continueChronology,
   markStaleFrom,
@@ -179,7 +180,7 @@ function startInfluence(
   tl: Timeline,
   source: TLNode,
   targets: TLNode[],
-  opts: { timeSpan?: string; guidance?: string; strength: Strength },
+  opts: { timeSpan?: string; guidance?: string; strength: Strength; followUpDepth?: number },
 ) {
   if (source.status !== 'ready') throw new HttpError(409, 'The influencing node is not ready yet');
   if (new Set(targets.map((t) => t.id)).size !== targets.length) throw new HttpError(400, 'Pick each node once');
@@ -199,12 +200,13 @@ function startInfluence(
       period: opts.timeSpan ?? '',
     });
     tl.nodes[placeholder.id] = placeholder;
-    putLink(tl, source.id, placeholder.id, opts.strength, '', 'user');
+    putLink(tl, source.id, placeholder.id, opts.strength, '', opts.followUpDepth ? 'llm' : 'user');
     const job = enqueue({
       type: 'influence',
       timelineId: tl.id,
       targetNodeId: t.id,
       influenceFrom: source.id,
+      followUpDepth: opts.followUpDepth,
       placeholderId: placeholder.id,
       timeSpan: opts.timeSpan || undefined,
       guidance: opts.guidance || undefined,
@@ -212,6 +214,46 @@ function startInfluence(
     placeholder.jobId = job.id;
     return placeholder;
   });
+}
+
+/** Follow-ups may only come from jobs the user started, so one click never cascades beyond one level. */
+const MAX_FOLLOW_UP_DEPTH = 1;
+
+/**
+ * Queues the follow-ups a writer asked for (each an INFLUENCE job from a node it just wrote to the latest
+ * event of another stream). Invalid ones are skipped with a reason; the rest of the result still stands.
+ */
+function startFollowUps(tl: Timeline, job: Job, requests: ApplyReport['followUps']) {
+  const queued: { id: string; stream: string }[] = [];
+  const skipped: string[] = [];
+  if (!requests.length) return { queued, skipped };
+  if ((job.followUpDepth ?? 0) >= MAX_FOLLOW_UP_DEPTH) {
+    skipped.push('this job is itself a follow-up, so it cannot request more');
+    return { queued, skipped };
+  }
+  for (const r of requests) {
+    const source = tl.nodes[r.source];
+    const target = tl.nodes[r.target];
+    if (!target) {
+      skipped.push(`${r.target}: no node with that id`);
+      continue;
+    }
+    if (!new WorldIndex(tl).isTip(target.id)) {
+      skipped.push(`"${target.title}" is not the latest event in its stream (pick one marked "latest in stream")`);
+      continue;
+    }
+    try {
+      const [placeholder] = startInfluence(tl, source, [target], {
+        strength: r.strength,
+        guidance: r.guidance,
+        followUpDepth: (job.followUpDepth ?? 0) + 1,
+      });
+      queued.push({ id: placeholder.id, stream: streamLabel(tl, target.id) });
+    } catch (err) {
+      skipped.push(`"${target.title}": ${(err as Error).message}`);
+    }
+  }
+  return { queued, skipped };
 }
 
 // ---- timelines -------------------------------------------------------------
@@ -358,13 +400,16 @@ app.patch(
     const edit = parse(nodeEdit, req.body);
     let changed = false;
     let contentChanged = false;
-    for (const [k, v] of Object.entries(edit) as [keyof typeof edit, unknown][]) {
-      if (v === undefined) continue;
+    for (const [k, raw] of Object.entries(edit) as [keyof typeof edit, unknown][]) {
+      if (raw === undefined) continue;
+      // An empty stream name clears the rename.
+      const v = k === 'streamName' && raw === '' ? undefined : raw;
       if (JSON.stringify(node[k]) !== JSON.stringify(v)) {
-        (node as any)[k] = v;
+        if (v === undefined) delete node[k];
+        else (node as any)[k] = v;
         changed = true;
-        // Re-rating significance or tone does not change what happened, so it does not invalidate later nodes.
-        if (k !== 'significance' && k !== 'tone') contentChanged = true;
+        // Re-rating or renaming the stream does not change what happened, so it does not invalidate later nodes.
+        if (k !== 'significance' && k !== 'tone' && k !== 'streamName') contentChanged = true;
       }
     }
     if (changed) {
@@ -445,6 +490,7 @@ app.post(
       placeholderId: old.placeholderId,
       mergeWith: old.mergeWith,
       influenceFrom: old.influenceFrom,
+      followUpDepth: old.followUpDepth,
       timeSpan: old.timeSpan,
       guidance: old.guidance,
     });
@@ -587,9 +633,10 @@ app.post(
       }
       rejectChronology(continueChronology(tl, job, result));
       const report = applyContinue(tl, job, result);
+      const followUps = startFollowUps(tl, job, report.followUps);
       finishJob(job, 'done');
       commit(tl);
-      return { ok: true, ...report };
+      return { ok: true, ...report, followUps };
     }
 
     const result = parse(regenerateResult, req.body);

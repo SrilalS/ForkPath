@@ -15,7 +15,7 @@ export interface GenerateOptions {
 }
 
 export type NodeEdit = Partial<
-  Pick<TLNode, 'title' | 'period' | 'summary' | 'narrative' | 'keyChanges' | 'significance' | 'tone'>
+  Pick<TLNode, 'title' | 'period' | 'summary' | 'narrative' | 'keyChanges' | 'significance' | 'tone' | 'streamName'>
 >;
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {

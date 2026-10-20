@@ -20,7 +20,7 @@ import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/Node
 import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
 import { AboutPage, GuidePage } from './components/Pages.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
-import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, threadLabel, threadRootOf } from './graph.ts';
+import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLabel } from './graph.ts';
 
 const nodeTypes: NodeTypes = { timeline: TimelineNode };
 const edgeTypes: EdgeTypes = { influence: InfluenceEdge };
@@ -395,7 +395,7 @@ export default function App() {
           from={timeline.nodes[dialog.from]}
           targets={dialog.targets.map((id) => ({
             ...timeline.nodes[id],
-            stream: threadLabel(timeline, threadRootOf(timeline, id)),
+            stream: streamLabel(timeline, id),
             existing: childrenOf(timeline, id).filter((c) => c.parentId === id && !c.threadName).length,
           }))}
           onClose={() => setDialog(null)}

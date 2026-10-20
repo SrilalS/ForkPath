@@ -2,7 +2,10 @@ import { Graph, layout } from '@dagrejs/dagre';
 import { MarkerType, Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
 import type { Timeline, TLNode } from '../../shared/types.ts';
 import { isMajor, TONE_STYLE } from './mood.ts';
-import { parentIdsOf, threadColors, threadLabel, threadRootOf } from './graph.ts';
+import { parentIdsOf, streamNameOf, threadColors, threadLabel, threadRootOf } from './graph.ts';
+
+/** Tag color for a renamed stream that is not a thread (threads keep their own color). */
+const RENAMED_MAIN_COLOR = '#9aa7c2';
 import { formatYear, parsePeriodStart } from '../../shared/time.ts';
 
 export const NODE_W = 300;
@@ -90,7 +93,10 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
   const threadOf = (n: TLNode): FlowNodeData['thread'] => {
     const root = threadRootOf(tl, n.id);
     const color = colors.get(root);
-    return color ? { name: threadLabel(tl, root), color, isStart: root === n.id } : undefined;
+    // The tag follows renames (streamName) further along the stream; the color stays the thread's.
+    const name = streamNameOf(tl, n.id);
+    if (color) return { name: name ?? threadLabel(tl, root), color, isStart: root === n.id };
+    return name ? { name, color: RENAMED_MAIN_COLOR, isStart: false } : undefined;
   };
 
   const childCount = new Map<string, number>();
