@@ -35,7 +35,7 @@ import { searchForJob, showNode } from './search.ts';
 import { builtinProblem, getConfig, publicConfig, resolveBuiltin, updateConfig } from './config.ts';
 import { monthSummary, recentUsage } from './usage.ts';
 import { listModels, probe } from './llm/probe.ts';
-import { startRunner } from './runner.ts';
+import { checkReachable, noteReachability, startRunner } from './runner.ts';
 import {
   addLink,
   applyContinue,
@@ -868,7 +868,14 @@ if (fs.existsSync(dist)) {
 /** Config (never the key), live status, and this month's usage for the Settings page. */
 const engineView = () => ({ ...publicConfig(), status: workerStatus(), usage: { month: monthSummary(), recent: recentUsage(15) } });
 
-app.get('/api/engine', h(() => engineView()));
+app.get(
+  '/api/engine',
+  h(async () => {
+    // Opening Settings refreshes a stale reachability check, so the status shown is current.
+    await checkReachable(10_000);
+    return engineView();
+  }),
+);
 
 app.put(
   '/api/engine',
@@ -907,7 +914,14 @@ app.post(
     const cfg = draftBuiltin(req.body);
     const problem = builtinProblem(cfg);
     if (problem) return { ok: false, label: '', ms: 0, detail: problem };
-    return probe(cfg);
+    const result = await probe(cfg);
+    // A test of the saved server says whether it is reachable, so the status cannot contradict it.
+    const saved = resolveBuiltin();
+    if (cfg.baseUrl === saved.baseUrl && cfg.provider === saved.provider) {
+      if (result.ok || !result.detail.startsWith('Cannot reach')) await checkReachable();
+      else noteReachability(result.detail);
+    }
+    return result;
   }),
 );
 

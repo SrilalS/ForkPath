@@ -2143,6 +2143,24 @@ a.btn--ghost {
   display: flex;
   gap: 8px;
 }
+.settings__prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.settings__prompt code {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .settings__inline input {
   flex: 1;
   min-width: 0;
@@ -2437,4 +2455,55 @@ a.btn--ghost {
   justify-content: space-between;
   gap: 8px;
   margin-top: 10px;
+}
+
+/* ---- model picker (Settings) --------------------------------------------- */
+
+.model-picker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.model-picker input {
+  width: 100%;
+}
+.model-picker__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-2);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.model-picker__count {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.model-picker ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.model-picker li {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.model-picker li.is-active {
+  background: var(--accent-bg);
+}
+.model-picker li.is-current {
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+.model-picker__empty {
+  cursor: default;
 }

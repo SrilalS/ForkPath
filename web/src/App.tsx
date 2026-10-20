@@ -46,13 +46,16 @@ const MAX_MERGE_WITH = 4;
 const MAX_INFLUENCE_TARGETS = 4;
 const layoutKey = (timelineId: string) => `forkpath.layout.${timelineId}`;
 
-/** Layout choice per timeline, remembered in this browser. Defaults to the compact tree. */
+/**
+ * Layout choice per timeline, remembered in this browser. Defaults to aligned by time, so events that
+ * happen together line up across streams; a timeline switched to the compact tree stays that way.
+ */
 function useLayoutMode(timelineId: string | null): [LayoutMode, (m: LayoutMode) => void] {
   const read = (id: string | null): LayoutMode => {
     try {
-      return id && localStorage.getItem(layoutKey(id)) === 'time' ? 'time' : 'structure';
+      return id && localStorage.getItem(layoutKey(id)) === 'structure' ? 'structure' : 'time';
     } catch {
-      return 'structure';
+      return 'time';
     }
   };
   const [state, setState] = useState(() => ({ id: timelineId, mode: read(timelineId) }));

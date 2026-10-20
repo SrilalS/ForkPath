@@ -26,6 +26,17 @@ function withCacheBreakpoint(messages: Message[]): Message[] {
   return [...messages.slice(0, -1), { ...last, content: marked }];
 }
 
+/**
+ * Extended thinking budgets for the reasoning effort setting. 'default' leaves thinking off (the API's
+ * default). Thinking blocks come back in the assistant content and are passed back untouched, as required.
+ */
+const THINKING_BUDGET: Record<ResolvedBuiltin['reasoningEffort'], number | undefined> = {
+  default: undefined,
+  low: 2048,
+  medium: 8192,
+  high: 24576,
+};
+
 export function anthropicProvider(cfg: ResolvedBuiltin): Provider {
   return {
     label: `${cfg.model} via Anthropic${/anthropic\.com/.test(cfg.baseUrl) ? '' : ` (${hostLabel(cfg.baseUrl)})`}`,
@@ -64,13 +75,16 @@ class AnthropicSession implements ChatSession {
     );
     this.messages.push({ role: 'user', content: blocks.length === 1 ? parts[0] : blocks });
     for (let round = 0; round < this.opts.maxToolCalls + 4; round++) {
+      const thinking = THINKING_BUDGET[this.cfg.reasoningEffort];
       const body: Record<string, unknown> = {
         model: this.cfg.model,
-        max_tokens: this.opts.maxOutputTokens,
+        // The thinking budget comes on top, so the answer keeps its full output allowance.
+        max_tokens: this.opts.maxOutputTokens + (thinking ?? 0),
         // The writer instructions are the same for every job: cache them.
         system: [{ type: 'text', text: this.opts.system, cache_control: { type: 'ephemeral' } }],
         messages: withCacheBreakpoint(this.messages),
       };
+      if (thinking) body.thinking = { type: 'enabled', budget_tokens: thinking };
       if (this.opts.tools.length) {
         body.tools = this.opts.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
         // Always "auto": changing tool_choice mid-job invalidates the cached messages. Past the budget,

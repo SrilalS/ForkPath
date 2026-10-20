@@ -44,6 +44,11 @@ class OpenAISession implements ChatSession {
         messages: this.messages,
         [this.official ? 'max_completion_tokens' : 'max_tokens']: this.opts.maxOutputTokens,
       };
+      // OpenRouter normalizes reasoning across its providers under `reasoning`; elsewhere it is OpenAI's field.
+      if (this.cfg.reasoningEffort !== 'default') {
+        if (/openrouter\.ai/.test(this.cfg.baseUrl)) body.reasoning = { effort: this.cfg.reasoningEffort };
+        else body.reasoning_effort = this.cfg.reasoningEffort;
+      }
       if (this.opts.tools.length) {
         body.tools = this.opts.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
         body.tool_choice = allowTools ? 'auto' : 'none';
@@ -63,7 +68,14 @@ class OpenAISession implements ChatSession {
 
       if (!calls.length) {
         const out = typeof msg.content === 'string' ? msg.content : '';
-        if (choice.finish_reason === 'length') throw new LlmError('The answer hit the output token limit', 'truncated');
+        if (choice.finish_reason === 'length') {
+          throw new LlmError(
+            out.trim()
+              ? `The answer hit the output token limit (${this.opts.maxOutputTokens})`
+              : `The model used all ${this.opts.maxOutputTokens} output tokens without answering: a reasoning model thinking at length. Raise the limit or pick a non-reasoning model`,
+            'truncated',
+          );
+        }
         return out;
       }
       for (const call of calls) {

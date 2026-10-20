@@ -218,7 +218,7 @@ export function GuidePage() {
               ['⤚⤙ Merge with...', 'Side panel', 'Click 1 to 4 cards on other branches, then Merge. The model writes where they meet; Branch A wins conflicts unless your guidance says otherwise.'],
               ['⇢ Influence...', 'Side panel', 'Click 1 to 4 cards in other streams, then Influence. Set the strength and guidance; the model writes a new event after each picked card, shaped by this one.'],
               ['🗑️ Delete', 'Side panel', 'Removes the card and everything after it.'],
-              ['◷ Align by time', 'Top bar', 'Lines cards up in columns by start year, so events in different branches that happen at the same time sit side by side.'],
+              ['◷ Align by time', 'Top bar', 'On by default: cards sit in columns by start year, so events in different branches that happen at the same time sit side by side. Toggle it off for the compact tree; each timeline remembers its choice.'],
               ['🔍 Review', 'Side panel', 'Another writer checks the event for contradictions, anachronisms, unearned outcomes, causality gaps and numbers out of scale. Problems show on the card; "Fix with Regenerate" sends the fixes as guidance. The "Plausibility review" option on any generate form runs it for you: Agent decides (the writer flags what it is unsure of) or Every event.'],
               ['★ Most likely', 'Top bar', 'Fades every card outside the most likely history: at each fork, the outcome the model rated highest. Streams in that world stay lit.'],
               ['⑂ Turning points', 'Top bar', 'A date-ordered list of every fork (with each outcome\'s share) and every pivotal event. Click one to jump to it.'],

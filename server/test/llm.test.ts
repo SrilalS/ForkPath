@@ -29,7 +29,7 @@ async function fakeServer(script: [number, unknown][]) {
   return { base, seen, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const cfg = (provider: ResolvedBuiltin['provider'], baseUrl: string): ResolvedBuiltin => ({
+const cfg = (provider: ResolvedBuiltin['provider'], baseUrl: string, reasoningEffort: ResolvedBuiltin['reasoningEffort'] = 'default'): ResolvedBuiltin => ({
   provider,
   model: 'test-model',
   baseUrl,
@@ -40,6 +40,7 @@ const cfg = (provider: ResolvedBuiltin['provider'], baseUrl: string): ResolvedBu
   maxToolCalls: 2,
   maxRepairs: 2,
   timeoutMs: 10_000,
+  reasoningEffort,
 });
 
 const searchCalls: unknown[] = [];
@@ -177,4 +178,31 @@ test('extractJson: plain, fenced, and wrapped in prose', () => {
   assert.deepEqual(extractJson('```json\n{"a":2}\n```'), { a: 2 });
   assert.deepEqual(extractJson('Here you go:\n{"a":3}\nHope that helps.'), { a: 3 });
   assert.throws(() => extractJson('no json here'));
+});
+
+test('reasoning effort: OpenRouter, other OpenAI-compatible servers and Anthropic each get their own field', async () => {
+  const oai = { choices: [{ message: { role: 'assistant', content: '{}' } }] };
+  const ant = { stop_reason: 'end_turn', content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 1, output_tokens: 1 } };
+  const srv = await fakeServer([[200, oai], [200, oai], [200, oai], [200, ant], [200, ant]]);
+  // The fake server is plain localhost; an "openrouter.ai" path segment marks the OpenRouter case.
+  const ask = (c: ResolvedBuiltin) => createProvider(c).open(opts()).ask('BRIEF');
+  try {
+    await ask(cfg('openai-compatible', `${srv.base}/openrouter.ai`, 'high'));
+    await ask(cfg('openai-compatible', srv.base, 'low'));
+    await ask(cfg('openai-compatible', srv.base));
+    await ask(cfg('anthropic', srv.base, 'medium'));
+    await ask(cfg('anthropic', srv.base));
+    const [router, plain, none, thinking, off] = srv.seen.map((s) => s.body);
+    assert.deepEqual(router.reasoning, { effort: 'high' });
+    assert.equal(router.reasoning_effort, undefined);
+    assert.equal(plain.reasoning_effort, 'low');
+    assert.equal(none.reasoning_effort, undefined, 'default sends nothing');
+    assert.equal(none.reasoning, undefined);
+    assert.deepEqual(thinking.thinking, { type: 'enabled', budget_tokens: 8192 });
+    assert.equal(thinking.max_tokens, 4000 + 8192, 'the thinking budget comes on top of the answer allowance');
+    assert.equal(off.thinking, undefined);
+    assert.equal(off.max_tokens, 4000);
+  } finally {
+    await srv.close();
+  }
 });

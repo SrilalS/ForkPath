@@ -9,6 +9,7 @@ import {
   TEMPERAMENTS,
   TONES,
 } from '../../shared/types.ts';
+import { REASONING_EFFORTS } from './config.ts';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const significance = z.enum(SIGNIFICANCES);
@@ -218,6 +219,7 @@ export const enginePatch = z.object({
       maxToolCalls: z.number().int().min(0).max(10).optional(),
       maxRepairs: z.number().int().min(0).max(5).optional(),
       timeoutMs: z.number().int().min(10_000).max(900_000).optional(),
+      reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
       /** null clears a price. */
       pricing: z
         .object({
