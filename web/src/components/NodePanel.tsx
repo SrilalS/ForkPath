@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Detail, Generation, NodeReview, ReviewFlag, ReviewMode, ReviewVerdict, Temperament, Timeline, TLNode } from '../../../shared/types.ts';
 import { api, type GenerateOptions } from '../api.ts';
 import { DETAIL_INFO, DetailField, GenerateOptionsFields, ReviewField, TEMPERAMENT_INFO, TemperamentField } from './forms.tsx';
+import { useConfirm } from './Confirm.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
 import { WorldIndex } from '../../../shared/world.ts';
@@ -59,6 +60,7 @@ export function NodePanel({
   onError,
 }: Props) {
   const [mode, setMode] = useState<Mode>('view');
+  const confirm = useConfirm();
   /** What the Regenerate form starts with: empty, or a review's fixes ("Fix with Regenerate"). */
   const [regenGuidance, setRegenGuidance] = useState('');
   const openRegenerate = (guidance: string) => {
@@ -454,9 +456,25 @@ export function NodePanel({
             <button
               className="btn btn--ghost btn--danger"
               disabled={busy}
-              onClick={() => {
-                const extra = descendants ? ` and the ${descendants} node${descendants > 1 ? 's' : ''} after it` : '';
-                if (confirm(`Delete "${node.title}"${extra}?`)) run(() => api.deleteNode(timeline.id, node.id)).then(() => onSelect(node.parentId));
+              onClick={async () => {
+                // Everything that goes with it: the events after it, their links, and work still in progress.
+                const gone = new Set([node.id, ...descendantIds(timeline, node.id, ix)]);
+                const links = timeline.links.filter((l) => gone.has(l.from) || gone.has(l.to)).length;
+                const writing = [...gone].filter((id) => timeline.nodes[id]?.status === 'generating').length;
+                const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+                const ok = await confirm({
+                  title: descendants ? 'Delete this event and what follows?' : 'Delete this event?',
+                  subject: node.title,
+                  details: [
+                    descendants ? `${plural(descendants, 'later event')} on this path ${descendants === 1 ? 'is' : 'are'} deleted too.` : 'Nothing comes after it.',
+                    ...(links ? [`${plural(links, 'influence link')} to other streams ${links === 1 ? 'is' : 'are'} removed.`] : []),
+                    ...(writing ? [`${plural(writing, 'event')} still being written ${writing === 1 ? 'is' : 'are'} cancelled.`] : []),
+                  ],
+                  note: 'This cannot be undone. Save branch first to keep a copy.',
+                  confirmLabel: descendants ? `Delete ${descendants + 1} events` : 'Delete event',
+                  danger: true,
+                });
+                if (ok) run(() => api.deleteNode(timeline.id, node.id)).then(() => onSelect(node.parentId));
               }}
             >
               Delete

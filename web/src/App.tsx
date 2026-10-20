@@ -21,6 +21,7 @@ import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/Node
 import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
 import { AboutPage, GuidePage } from './components/Pages.tsx';
 import { SettingsPage } from './components/Settings.tsx';
+import { useConfirm } from './components/Confirm.tsx';
 import { TurningPoints } from './components/TurningPoints.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
 import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLabel, unlikelyIds } from './graph.ts';
@@ -170,6 +171,7 @@ export default function App() {
   }, []);
   const [sidebarCollapsed, toggleSidebar] = useSidebarCollapsed();
 
+  const confirm = useConfirm();
   const toast = useCallback((msg: string) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, msg }]);
@@ -259,7 +261,20 @@ export default function App() {
         onNew={() => (route.tl ? setDialog({ kind: 'new' }) : navigate(null))}
         onImport={importFromFile}
         onDelete={async (t) => {
-          if (!confirm(`Delete the timeline "${t.title}" and all ${t.nodeCount} nodes?`)) return;
+          const ok = await confirm({
+            title: 'Delete this timeline?',
+            subject: t.title,
+            details: [`All ${t.nodeCount} events, their links and any jobs still waiting are deleted.`],
+            note: 'This cannot be undone. Export it first to keep a copy you can import later.',
+            confirmLabel: 'Delete timeline',
+            danger: true,
+            extra: (
+              <a className="btn btn--small btn--ghost" href={api.exportUrl(t.id)} download>
+                Export first
+              </a>
+            ),
+          });
+          if (!ok) return;
           try {
             await api.deleteTimeline(t.id);
             if (route.tl === t.id) navigate(null);
