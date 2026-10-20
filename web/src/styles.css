@@ -1604,6 +1604,14 @@ a.btn--ghost {
   stroke-width: 4.5;
   opacity: 1;
 }
+/* Drawn by InfluenceEdge at a fixed size; the dark outline separates it from cards and other lines. */
+.influence-arrow {
+  fill: var(--influence);
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
 .tl-edge--influence .react-flow__edge-text {
   fill: var(--influence);
   font-size: 10px;
@@ -2573,4 +2581,55 @@ a.btn--ghost {
 }
 .btn--danger-solid:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red) 85%, black);
+}
+
+/* ---- usage drawer (shares the turning points drawer's frame) ---- */
+.usage {
+  overflow-y: auto;
+}
+.usage .turning__list {
+  overflow: visible;
+}
+.usage__table {
+  margin: 10px 12px 4px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.usage__table th,
+.usage__table td {
+  padding: 4px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+.usage__table thead th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+.usage__table tbody th {
+  text-align: left;
+  font-weight: 600;
+}
+.usage__notes {
+  margin: 6px 0 0;
+  padding: 0 16px 0 30px;
+  line-height: 1.45;
+}
+.usage__notes li + li {
+  margin-top: 3px;
+}
+.usage__subhead {
+  margin: 12px 16px 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+.usage__cost {
+  font-variant-numeric: tabular-nums;
+}
+.usage .turning__point {
+  grid-template-columns: minmax(52px, auto) 1fr;
 }

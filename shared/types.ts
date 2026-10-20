@@ -10,8 +10,9 @@
  *   5: adds node streamName (renames a stream from that node onward)
  *   6: adds node generation (which engine and model wrote it, tokens, cost)
  *   7: adds node review (a plausibility check's verdict and flags)
+ *   8: adds node spent and timeline usage (running token and cost totals)
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export type NodeKind = 'deviation' | 'event';
 export type NodeSource = 'user' | 'llm' | 'llm-edited';
@@ -76,9 +77,44 @@ export interface TLNode {
   generation?: Generation;
   /** The latest plausibility review of this node's current content (cleared when the content changes). */
   review?: NodeReview;
+  /**
+   * Everything the built-in engine spent on this node: its share of every job that wrote it (regenerations
+   * too), plus its reviews and failed regenerations. `generation` only describes the latest write.
+   */
+  spent?: UsageTotals;
   error?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Tokens and cost of model calls (built-in engine only). Counts can be fractional on a node, because a job
+ * that writes several nodes splits its cost between them.
+ */
+export interface UsageTotals {
+  jobs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  costUsd: number;
+  /** Jobs whose cost is unknown because no prices were configured. Their tokens still count. */
+  unpriced: number;
+  /**
+   * What the Claude Code worker's tokens would cost at Claude API list prices. Kept apart from costUsd:
+   * on a Pro or Max plan nothing is billed per token.
+   */
+  estimatedUsd?: number;
+}
+
+/** A world's running totals. Kept when nodes are deleted: the money was spent either way. */
+export interface TimelineUsage {
+  total: UsageTotals;
+  /** The part of `total` spent on jobs that wrote nothing: failed, cancelled or interrupted. */
+  wasted: UsageTotals;
+  /** The part of `total` spent on plausibility reviews. */
+  reviews: UsageTotals;
+  /** Jobs finished by the Claude Code worker without a token count (older workers, or no transcript found). */
+  untracked: number;
 }
 
 /**
@@ -132,7 +168,10 @@ export interface NodeReview {
   at?: string;
 }
 
-/** Which engine and model wrote a node. Token and cost fields are only known for the built-in engine. */
+/**
+ * Which engine and model wrote a node. Token and cost fields come from the built-in engine, or from the
+ * Claude Code worker's session transcript (then costUsd is an API-equivalent estimate: costEstimated).
+ */
 export interface Generation {
   engine: 'external' | 'builtin';
   /** e.g. "claude-sonnet-4-6 via Anthropic", or "Claude Code worker". */
@@ -145,6 +184,8 @@ export interface Generation {
   cachedInputTokens?: number;
   /** Whole job's cost in USD, when prices are configured. */
   costUsd?: number;
+  /** costUsd is what the worker's tokens would cost at Claude API list prices, not a charge. */
+  costEstimated?: boolean;
   /** Invalid results the model had to fix. */
   repairs?: number;
   /** Nodes written by the same job; tokens and cost are for the whole job, shared by all of them. */
@@ -176,6 +217,8 @@ export interface Timeline {
   rootId: string;
   nodes: Record<string, TLNode>;
   links: InfluenceLink[];
+  /** Token and cost totals for the whole world (absent until its first built-in or worker job). */
+  usage?: TimelineUsage;
   createdAt: string;
   updatedAt: string;
 }
@@ -236,6 +279,8 @@ export interface Job {
   deliveredAt?: string;
   finishedAt?: string;
   error?: string;
+  /** What the Claude Code worker reported spending on this job (read from its transcript before submitting). */
+  workerSpend?: { model: string; inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd?: number; estimated: true };
 }
 
 export interface WorkerStatus {

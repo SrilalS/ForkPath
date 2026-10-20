@@ -160,6 +160,27 @@ export const reviewResult = z
 
 export type LinkRef = z.infer<typeof linkRef>;
 
+const tokenCount = z.number().int().min(0).max(1e9);
+
+/** The Claude Code worker's spend on a job: one entry per model reply, read from its session transcript. */
+export const workerUsage = z.object({
+  replies: z
+    .array(
+      z.object({
+        model: z.string().min(1).max(100),
+        inputTokens: tokenCount,
+        cacheReadTokens: tokenCount,
+        cacheWrite5mTokens: tokenCount,
+        cacheWrite1hTokens: tokenCount,
+        outputTokens: tokenCount,
+        fast: z.boolean().optional(),
+        usOnly: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .max(5000),
+});
+
 export const linkInput = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
