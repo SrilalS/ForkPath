@@ -80,3 +80,7 @@ job yourself, one at a time:
 | `node worker/submit.mjs <id>` | `OK`, `INVALID`, `DISCARD` or `ERROR` (writers use this) |
 | `node worker/submit.mjs <id> --fail "reason"` | Marks a job failed; the user can retry it |
 | `node worker/search.mjs <id> "keywords"` | Events a job may link to (writers use this) |
+
+`submit.mjs` also reports what the job cost: it reads this session's Claude Code transcripts (the writer
+subagent's included) and sends the tokens to the app, which shows them with an API-equivalent price. Nothing
+to do on your side, and a missing transcript never blocks a submission.

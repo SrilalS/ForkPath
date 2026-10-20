@@ -1,6 +1,7 @@
 import { SCHEMA_VERSION, type ExportFile, type Timeline, type TLNode } from '../../shared/types.ts';
 import { ancestorIdsOf, descendantsOf, listTimelines, newId, now, parentIdsOf } from './store.ts';
 import { MigrationError, migrateTimeline } from './migrate.ts';
+import { emptyTimelineUsage, nodesSpent } from '../../shared/usage.ts';
 
 /** Strips in-flight state so an exported file only holds finished history. */
 function cleanNode(n: TLNode): TLNode {
@@ -46,6 +47,8 @@ export function buildExport(tl: Timeline, branchNodeId?: string): ExportFile {
       title: branchNode && branchNode.id !== tl.rootId ? `${tl.title}: ${branchNode.title}` : tl.title,
       nodes,
       links: tl.links.filter((l) => nodes[l.from] && nodes[l.to]),
+      // A branch carries what its own nodes cost, not the whole world's spend (failures included).
+      usage: branchNodeId && tl.usage ? { ...emptyTimelineUsage(), total: nodesSpent(Object.values(nodes)) } : tl.usage,
     },
   };
 }

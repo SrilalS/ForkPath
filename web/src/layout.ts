@@ -1,4 +1,4 @@
-import { MarkerType, Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
+import { Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
 import type { Timeline, TLNode } from '../../shared/types.ts';
 import { isMajor, TONE_STYLE } from './mood.ts';
 import { streamNameOf, threadColors, threadLabel, threadRootOf } from './graph.ts';
@@ -185,7 +185,6 @@ export function toFlow(
       type: 'influence', // floating edge, see components/InfluenceEdge.tsx
       data: { strength: l.strength, note: l.note },
       className: `tl-edge tl-edge--influence tl-edge--${l.strength}`,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'var(--influence)' },
       zIndex: 1,
     });
   }

@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION, SIGNIFICANCES, STRENGTHS, TONES, type Timeline } from '../../shared/types.ts';
+import { addSpend, emptyTimelineUsage, emptyTotals } from '../../shared/usage.ts';
 
 /**
  * Upgrades stored or imported timelines to the current SCHEMA_VERSION.
@@ -30,6 +31,28 @@ const steps: Record<number, (tl: Raw) => Raw> = {
   5: (tl) => tl,
   // v6 -> v7: optional node review (plausibility check). Older nodes simply have none.
   6: (tl) => tl,
+  // v7 -> v8: running usage totals. Seeded from what each node's generation recorded; failed jobs and
+  // reviews from before this version were never stored on the timeline, so they are not in the totals.
+  7: (tl) => {
+    const usage = emptyTimelineUsage();
+    for (const n of Object.values(tl.nodes ?? {}) as Raw[]) {
+      const g = n.generation;
+      if (!g || typeof g !== 'object') continue;
+      const share = 1 / (typeof g.nodesInJob === 'number' && g.nodesInJob > 1 ? g.nodesInJob : 1);
+      if (g.engine === 'external') {
+        usage.untracked += share;
+      } else if (typeof g.inputTokens === 'number') {
+        const spend = { inputTokens: g.inputTokens, outputTokens: g.outputTokens ?? 0, cachedInputTokens: g.cachedInputTokens ?? 0, costUsd: g.costUsd };
+        addSpend((n.spent = emptyTotals()), spend, share);
+        addSpend(usage.total, spend, share);
+      }
+    }
+    usage.untracked = Math.round(usage.untracked);
+    usage.total.jobs = Math.round(usage.total.jobs);
+    usage.total.unpriced = Math.round(usage.total.unpriced);
+    if (usage.untracked || usage.total.jobs) tl.usage = usage;
+    return tl;
+  },
 };
 
 export class MigrationError extends Error {}
@@ -61,6 +84,9 @@ export function migrateTimeline(raw: Raw): { timeline: Timeline; migrated: boole
   return { timeline: tl as Timeline, migrated: from !== SCHEMA_VERSION, from };
 }
 
+const TOTAL_KEYS = ['jobs', 'inputTokens', 'outputTokens', 'cachedInputTokens', 'costUsd', 'unpriced'] as const;
+const isTotals = (t: unknown) => !!t && typeof t === 'object' && TOTAL_KEYS.every((k) => Number.isFinite((t as Raw)[k]));
+
 /** Repairs values that are invalid at any version, so one bad field never makes a file unreadable. */
 function sanitize(tl: Raw) {
   for (const n of Object.values(tl.nodes) as Raw[]) {
@@ -84,11 +110,17 @@ function sanitize(tl: Raw) {
     if (n.generation !== undefined && (typeof n.generation !== 'object' || typeof n.generation?.model !== 'string')) {
       delete n.generation;
     }
+    if (n.spent !== undefined && !isTotals(n.spent)) delete n.spent;
     if (n.streamName !== undefined) {
       const name = typeof n.streamName === 'string' ? n.streamName.trim().slice(0, 80) : '';
       if (name) n.streamName = name;
       else delete n.streamName;
     }
+  }
+  if (tl.usage !== undefined) {
+    const u = tl.usage;
+    const ok = u && typeof u === 'object' && isTotals(u.total) && isTotals(u.wasted) && isTotals(u.reviews) && Number.isFinite(u.untracked);
+    if (!ok) delete tl.usage;
   }
   tl.links = (Array.isArray(tl.links) ? tl.links : []).filter(
     (l: Raw) =>

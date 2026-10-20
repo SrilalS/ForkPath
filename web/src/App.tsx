@@ -23,6 +23,7 @@ import { AboutPage, GuidePage } from './components/Pages.tsx';
 import { SettingsPage } from './components/Settings.tsx';
 import { useConfirm } from './components/Confirm.tsx';
 import { TurningPoints } from './components/TurningPoints.tsx';
+import { UsagePanel, usageLabel } from './components/UsagePanel.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
 import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLabel, unlikelyIds } from './graph.ts';
 
@@ -131,7 +132,8 @@ export default function App() {
   const [layoutMode, setLayoutMode] = useLayoutMode(route.tl);
   /** "Most likely" on: fade everything outside the most likely history. */
   const [likelyOnly, setLikelyOnly] = useState(false);
-  const [turningOpen, setTurningOpen] = useState(false);
+  /** The drawer under the top bar: Turning points or Usage, one at a time. */
+  const [drawer, setDrawer] = useState<'turning' | 'usage' | null>(null);
   /** Node waiting for picks on the canvas: nodes to converge with, or nodes whose streams it influences. */
   const [pickSource, setPickSource] = useState<{ kind: 'merge' | 'link'; id: string; selected?: string[] } | null>(null);
   /** Set by a node's + button: open the side panel on that node with the Continue form showing. */
@@ -320,14 +322,17 @@ export default function App() {
               onLayoutMode={setLayoutMode}
               likelyOnly={likelyOnly}
               onLikelyOnly={setLikelyOnly}
-              turningOpen={turningOpen}
-              onTurningOpen={setTurningOpen}
+              drawer={drawer}
+              onDrawer={setDrawer}
               onSelect={selectNode}
               onError={toast}
             >
-              {turningOpen && (
-                <TurningPoints timeline={timeline} selectedId={route.node} onSelect={selectNode} onClose={() => setTurningOpen(false)} />
-              )}
+              {/* One expression, so the drawer row is not rendered at all while both are closed. */}
+              {drawer === 'turning' ? (
+                <TurningPoints timeline={timeline} selectedId={route.node} onSelect={selectNode} onClose={() => setDrawer(null)} />
+              ) : drawer === 'usage' ? (
+                <UsagePanel timeline={timeline} selectedId={route.node} onSelect={selectNode} onClose={() => setDrawer(null)} />
+              ) : null}
             </TopBar>
             {pick && (
               <div className={`merge-banner merge-banner--${pick.kind}`}>
@@ -642,8 +647,8 @@ function TopBar({
   onLayoutMode,
   likelyOnly,
   onLikelyOnly,
-  turningOpen,
-  onTurningOpen,
+  drawer,
+  onDrawer,
   onSelect,
   onError,
   children,
@@ -656,8 +661,8 @@ function TopBar({
   onLayoutMode: (m: LayoutMode) => void;
   likelyOnly: boolean;
   onLikelyOnly: (on: boolean) => void;
-  turningOpen: boolean;
-  onTurningOpen: (open: boolean) => void;
+  drawer: 'turning' | 'usage' | null;
+  onDrawer: (d: 'turning' | 'usage' | null) => void;
   onSelect: (id: string) => void;
   onError: (m: string) => void;
 }) {
@@ -730,12 +735,20 @@ function TopBar({
           ★ Most likely
         </button>
         <button
-          className={`btn btn--small ${turningOpen ? 'btn--toggled' : 'btn--ghost'}`}
-          aria-pressed={turningOpen}
-          onClick={() => onTurningOpen(!turningOpen)}
+          className={`btn btn--small ${drawer === 'turning' ? 'btn--toggled' : 'btn--ghost'}`}
+          aria-pressed={drawer === 'turning'}
+          onClick={() => onDrawer(drawer === 'turning' ? null : 'turning')}
           title="Every fork and pivotal event, in date order"
         >
           ⑂ Turning points
+        </button>
+        <button
+          className={`btn btn--small ${drawer === 'usage' ? 'btn--toggled' : 'btn--ghost'}`}
+          aria-pressed={drawer === 'usage'}
+          onClick={() => onDrawer(drawer === 'usage' ? null : 'usage')}
+          title="Tokens and cost spent on this world, and its costliest events"
+        >
+          🪙 {usageLabel(timeline)}
         </button>
         <button className="btn btn--small btn--ghost" onClick={() => flow.fitView({ padding: 0.25, maxZoom: 1, duration: 400 })}>
           Fit view

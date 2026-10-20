@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkerStatus } from '../../../shared/types.ts';
+import { fmtTokens, fmtUsd } from '../../../shared/usage.ts';
 import { api, type EngineId, type EnginePatch, type EngineView, type ProbeResult, type ProviderId, type ReasoningEffort } from '../api.ts';
 
 /** Starting points for common endpoints: they fill in the protocol and URL; the model is still yours to pick. */
@@ -82,8 +83,6 @@ function patchFrom(d: Draft): EnginePatch {
   };
 }
 
-const fmtTokens = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : String(n));
-const fmtUsd = (n: number | undefined) => (n === undefined ? '-' : n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`);
 
 export function SettingsPage({ worker, onError }: { worker: WorkerStatus | null; onError: (m: string) => void }) {
   const [view, setView] = useState<EngineView | null>(null);

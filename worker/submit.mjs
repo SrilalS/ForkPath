@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { repliesForJob } from './transcript.mjs';
 
 const BASE = process.env.FORKPATH_URL ?? process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
 const [jobId, ...rest] = process.argv.slice(2);
@@ -30,7 +31,21 @@ async function post(url, body) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
+/**
+ * Tells the app what this job cost (read from this Claude Code session's transcripts), before the result
+ * settles it. Never stops a submission.
+ */
+async function reportUsage() {
+  try {
+    const replies = repliesForJob(jobId);
+    if (replies) await post(`/api/worker/jobs/${jobId}/usage`, { replies });
+  } catch {
+    // Usage is a nice-to-have: the job is submitted either way.
+  }
+}
+
 async function main() {
+  await reportUsage();
   if (rest[0] === '--fail') {
     const { status, data } = await post(`/api/worker/jobs/${jobId}/fail`, { error: rest[1] ?? 'unspecified' });
     console.log(status < 300 ? 'OK failure recorded' : `ERROR ${status}: ${data.error}`);

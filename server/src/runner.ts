@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Generation, Job } from '../../shared/types.ts';
+import type { JobSpend } from '../../shared/usage.ts';
 import { API_TOOLS, buildBriefParts } from './brief.ts';
 import { builtinProblem, costUsd, getConfig, onConfigChange, resolveBuiltin } from './config.ts';
 import { monthSummary, recordUsage } from './usage.ts';
@@ -74,8 +75,14 @@ function toolsFor(job: Job): ToolSpec[] {
 /** How the runner hands results to the server: the same functions the worker HTTP routes use. */
 export interface RunnerDeps {
   /** Validates and applies a result. Throws an error with `status` 400 (invalid), 410 (discard) or 409. */
-  submit(jobId: string, body: unknown, gen: Omit<Generation, 'jobType' | 'at' | 'nodesInJob'>): { created?: { title: string }[]; updated?: { title: string } };
+  submit(
+    jobId: string,
+    body: unknown,
+    gen: Omit<Generation, 'jobType' | 'at' | 'nodesInJob'>,
+  ): { created?: { id: string; title: string }[]; updated?: { id: string; title: string } };
   fail(jobId: string, reason: string): void;
+  /** Adds what a job spent to its world and nodes (`written`: the nodes it wrote, if it finished). */
+  spend(job: Job, outcome: 'done' | 'failed' | 'cancelled', spend: JobSpend, written: string[]): void;
 }
 
 const running = new Map<string, AbortController>();
@@ -153,30 +160,41 @@ const fmtUsage = (u: Usage) =>
 
 type Outcome = 'done' | 'failed' | 'cancelled' | 'released';
 
-/** Runs one job and records its tokens and cost in the usage ledger, whatever the outcome. */
+/** Runs one job and records its tokens and cost, whatever the outcome: in the usage ledger, and on its world and nodes. */
 async function runJob(job: Job, deps: RunnerDeps, controller: AbortController) {
   const r = resolveBuiltin();
   const provider = createProvider(r);
   const started = Date.now();
-  const usage = { value: undefined as Usage | undefined };
+  const usage: JobUsage = { value: undefined, written: [] };
   const outcome = await attemptJob(job, deps, controller, r, provider.label, started, usage);
   const u = usage.value;
   if (u && u.requests > 0) {
+    const result = outcome === 'released' ? 'cancelled' : outcome;
+    const spend: JobSpend = {
+      inputTokens: u.inputTokens,
+      outputTokens: u.outputTokens,
+      cachedInputTokens: u.cachedInputTokens,
+      costUsd: costUsd(u),
+    };
     recordUsage({
       at: new Date().toISOString(),
       jobId: job.id,
       timelineId: job.timelineId,
       jobType: job.type,
       model: provider.label,
-      outcome: outcome === 'released' ? 'cancelled' : outcome,
-      inputTokens: u.inputTokens,
-      outputTokens: u.outputTokens,
-      cachedInputTokens: u.cachedInputTokens,
-      costUsd: costUsd(u),
+      outcome: result,
+      ...spend,
       durationMs: Date.now() - started,
     });
+    deps.spend(job, result, spend, usage.written);
     publishStatus(); // the budget may now be reached
   }
+}
+
+/** Filled in while a job runs: the session's token counts, and the nodes it wrote once it is saved. */
+interface JobUsage {
+  value: Usage | undefined;
+  written: string[];
 }
 
 async function attemptJob(
@@ -186,7 +204,7 @@ async function attemptJob(
   r: ReturnType<typeof resolveBuiltin>,
   label: string,
   started: number,
-  usage: { value: Usage | undefined },
+  usage: JobUsage,
 ): Promise<Outcome> {
   const tl = getTimeline(job.timelineId);
   if (!tl) {
@@ -232,7 +250,9 @@ async function attemptJob(
         costUsd: costUsd(u),
         repairs: attempt,
       });
-      const titles = out.created?.map((c) => c.title) ?? (out.updated ? [out.updated.title] : []);
+      const written = out.created ?? (out.updated ? [out.updated] : []);
+      usage.written = written.map((w) => w.id);
+      const titles = written.map((w) => w.title);
       log(`✅ ${titles.join(' | ')} (${Math.round((Date.now() - started) / 1000)}s; ${fmtUsage(u)})`);
       return 'done';
     } catch (err) {

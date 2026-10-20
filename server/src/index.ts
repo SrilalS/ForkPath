@@ -3,6 +3,7 @@ import path from 'node:path';
 import express, { type Request, type Response } from 'express';
 import { SCHEMA_VERSION, type Generation, type Job, type Detail, type NodeReview, type ReviewMode, type Strength, type Temperament, type Timeline, type TLNode } from '../../shared/types.ts';
 import { streamLabel, WorldIndex } from '../../shared/world.ts';
+import { addSpend, emptyTimelineUsage, emptyTotals, type JobSpend } from '../../shared/usage.ts';
 import { buildExport, exportFileName, importFile } from './transfer.ts';
 import { MigrationError } from './migrate.ts';
 import {
@@ -36,6 +37,7 @@ import { builtinProblem, getConfig, publicConfig, resolveBuiltin, updateConfig }
 import { monthSummary, recentUsage } from './usage.ts';
 import { listModels, probe } from './llm/probe.ts';
 import { checkReachable, noteReachability, startRunner } from './runner.ts';
+import { replyCostUsd, type ReplyUsage } from './pricing.ts';
 import {
   addLink,
   applyContinue,
@@ -58,6 +60,7 @@ import {
   nodeEdit,
   regenerateResult,
   reviewResult,
+  workerUsage,
 } from './schema.ts';
 
 // Not PORT: dev tooling often sets PORT for the web server, which would collide with Vite.
@@ -737,9 +740,10 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
       verdict: result.verdict,
       summary: result.summary,
       flags: result.verdict === 'plausible' ? result.flags.slice(0, 2) : result.flags,
-      model: gen?.model ?? 'Claude Code worker',
+      model: (gen ?? workerGeneration(job)).model,
       at: now(),
     };
+    noteWorkerJob(tl, job, gen);
     finishJob(job, 'done');
     commit(tl);
     return { ok: true, updated: { id: node.id, title: node.title }, verdict: result.verdict, flags: result.flags.length };
@@ -760,6 +764,7 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
     stampGeneration(tl, job, report.created.map((c) => c.id), gen);
     const followUps = startFollowUps(tl, job, report.followUps);
     const reviews = startReviews(tl, job, report.created);
+    noteWorkerJob(tl, job, gen);
     finishJob(job, 'done');
     commit(tl);
     return { ok: true, ...report, followUps, reviews };
@@ -775,6 +780,7 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
   const report = applyRegenerate(tl, node, result);
   stampGeneration(tl, job, [node.id], gen);
   const reviews = startReviews(tl, job, [{ id: node.id, reviewReason: result.node.requestReview }]);
+  noteWorkerJob(tl, job, gen);
   finishJob(job, 'done');
   commit(tl);
   return { ok: true, updated: { id: node.id, title: node.title }, ...report, reviews };
@@ -783,13 +789,25 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
 /** What the engine knows about how a result was produced; the rest of Generation is filled in here. */
 type GenerationInfo = Omit<Generation, 'jobType' | 'at' | 'nodesInJob'>;
 
-/** Records on each written node which engine and model wrote it (and, for the built-in engine, the cost). */
-function stampGeneration(tl: Timeline, job: Job, nodeIds: string[], gen?: GenerationInfo) {
-  const info: GenerationInfo = gen ?? {
+/** The worker's generation record: its model and tokens when it reported them from its transcript. */
+function workerGeneration(job: Job): GenerationInfo {
+  const ws = job.workerSpend;
+  return {
     engine: 'external',
-    model: 'Claude Code worker',
+    model: ws ? `${ws.model} via Claude Code worker` : 'Claude Code worker',
     durationMs: job.claimedAt ? Date.now() - Date.parse(job.claimedAt) : undefined,
+    ...(ws && {
+      inputTokens: ws.inputTokens,
+      outputTokens: ws.outputTokens,
+      cachedInputTokens: ws.cachedInputTokens,
+      ...(ws.costUsd !== undefined && { costUsd: ws.costUsd, costEstimated: true }),
+    }),
   };
+}
+
+/** Records on each written node which engine and model wrote it, and what it cost when that is known. */
+function stampGeneration(tl: Timeline, job: Job, nodeIds: string[], gen?: GenerationInfo) {
+  const info: GenerationInfo = gen ?? workerGeneration(job);
   for (const id of nodeIds) {
     const node = tl.nodes[id];
     if (node) {
@@ -803,6 +821,58 @@ function stampGeneration(tl: Timeline, job: Job, nodeIds: string[], gen?: Genera
       };
     }
   }
+}
+
+/**
+ * Adds a job's spend (built-in, or reported by the worker) to its world, and to the nodes it was for: the nodes it wrote, split evenly,
+ * or the node it was regenerating or reviewing when it wrote nothing. Called whatever the outcome.
+ */
+function recordSpend(job: Job, outcome: 'done' | 'failed' | 'cancelled', spend: JobSpend, written: string[]) {
+  const tl = getTimeline(job.timelineId);
+  if (!tl) return;
+  const usage = (tl.usage ??= emptyTimelineUsage());
+  addSpend(usage.total, spend);
+  if (outcome !== 'done') addSpend(usage.wasted, spend);
+  if (job.type === 'review') addSpend(usage.reviews, spend);
+  const forNodes = outcome === 'done' && written.length ? written : job.type === 'regenerate' || job.type === 'review' ? [job.targetNodeId] : [];
+  const ids = forNodes.filter((id) => tl.nodes[id]);
+  for (const id of ids) addSpend((tl.nodes[id].spent ??= emptyTotals()), spend, 1 / ids.length);
+  commit(tl);
+}
+
+/** Counts a worker job that reported no tokens, so the totals say how many are missing. */
+function noteWorkerJob(tl: Timeline, job: Job, gen?: GenerationInfo) {
+  if (!gen && !job.workerSpend) (tl.usage ??= emptyTimelineUsage()).untracked++;
+}
+
+/** Adds what the worker reported for a job once the job is settled. Each report counts once. */
+function recordWorkerSpend(jobId: string, outcome: 'done' | 'failed' | 'cancelled', written: string[]) {
+  const job = getJob(jobId);
+  if (!job?.workerSpend) return;
+  const { model: _model, ...spend } = job.workerSpend;
+  delete job.workerSpend;
+  recordSpend(job, outcome, spend, written);
+}
+
+/** Totals the worker's replies for a job and prices them at Claude API list prices. */
+function workerSpendOf(replies: ReplyUsage[]): NonNullable<Job['workerSpend']> {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let costUsd = 0;
+  let priced = 0;
+  for (const r of replies) {
+    inputTokens += r.inputTokens + r.cacheReadTokens + r.cacheWrite5mTokens + r.cacheWrite1hTokens;
+    cachedInputTokens += r.cacheReadTokens;
+    outputTokens += r.outputTokens;
+    const usd = replyCostUsd(r);
+    if (usd !== undefined) {
+      costUsd += usd;
+      priced++;
+    }
+  }
+  const model = [...new Set(replies.map((r) => r.model))].join(', ');
+  return { model, inputTokens, outputTokens, cachedInputTokens, ...(priced ? { costUsd } : {}), estimated: true };
 }
 
 /** Marks a job failed. Its placeholder shows the reason and can be retried; a regenerate keeps the old content. */
@@ -832,7 +902,17 @@ app.post(
   '/api/worker/jobs/:jobId/result',
   h((req) => {
     touchWorker();
-    return submitResult(String(req.params.jobId), req.body);
+    const jobId = String(req.params.jobId);
+    try {
+      const out = submitResult(jobId, req.body) as { created?: { id: string }[]; updated?: { id: string } };
+      recordWorkerSpend(jobId, 'done', out.created?.map((c) => c.id) ?? (out.updated ? [out.updated.id] : []));
+      return out;
+    } catch (err) {
+      // Discarded (cancelled or deleted meanwhile): the tokens were still spent. An invalid result (400) is
+      // resubmitted with a fresh usage report, so it records nothing yet.
+      if (err instanceof HttpError && err.status === 410) recordWorkerSpend(jobId, 'cancelled', []);
+      throw err;
+    }
   }),
 );
 
@@ -840,7 +920,26 @@ app.post(
   '/api/worker/jobs/:jobId/fail',
   h((req) => {
     touchWorker();
-    failJob(String(req.params.jobId), String(req.body?.error ?? 'Worker reported failure'));
+    const jobId = String(req.params.jobId);
+    failJob(jobId, String(req.body?.error ?? 'Worker reported failure'));
+    recordWorkerSpend(jobId, 'failed', []);
+  }),
+);
+
+/**
+ * The worker reports what it spent on a job, read from its Claude Code transcript, right before it submits
+ * (or fails) the job. A later report replaces an earlier one, so a resubmission after INVALID counts once.
+ */
+app.post(
+  '/api/worker/jobs/:jobId/usage',
+  h((req) => {
+    touchWorker();
+    const job = getJob(String(req.params.jobId));
+    if (!job) throw new HttpError(404, 'Job not found');
+    if (job.status !== 'claimed' && job.status !== 'pending') return { ok: false, reason: `job is ${job.status}` };
+    const { replies } = parse(workerUsage, req.body);
+    job.workerSpend = workerSpendOf(replies);
+    return { ok: true, ...job.workerSpend };
   }),
 );
 
@@ -928,6 +1027,7 @@ app.post(
 startRunner({
   submit: (jobId, body, gen) => submitResult(jobId, body, gen),
   fail: (jobId, reason) => failJob(jobId, reason),
+  spend: recordSpend,
 });
 
 app.listen(PORT, HOST, () => {

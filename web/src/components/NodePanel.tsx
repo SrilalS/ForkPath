@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Detail, Generation, NodeReview, ReviewFlag, ReviewMode, ReviewVerdict, Temperament, Timeline, TLNode } from '../../../shared/types.ts';
+import type { Detail, Generation, NodeReview, ReviewFlag, ReviewMode, ReviewVerdict, Temperament, Timeline, TLNode, UsageTotals } from '../../../shared/types.ts';
 import { api, type GenerateOptions } from '../api.ts';
 import { DETAIL_INFO, DetailField, GenerateOptionsFields, ReviewField, TEMPERAMENT_INFO, TemperamentField } from './forms.tsx';
 import { useConfirm } from './Confirm.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
 import { WorldIndex } from '../../../shared/world.ts';
+import { fmtTokens, fmtUsd } from '../../../shared/usage.ts';
 import {
   childrenOf,
   descendantIds,
@@ -369,6 +370,7 @@ export function NodePanel({
             )}
 
             {node.generation && <GenerationLine g={node.generation} edited={node.source === 'llm-edited'} />}
+            {node.spent && <SpentLine spent={node.spent} g={node.generation} />}
           </>
         )}
       </div>
@@ -748,14 +750,12 @@ function Narrative({ text }: { text: string }) {
   );
 }
 
-const tokens = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-
 /** Which engine and model wrote this node, and for the built-in engine what it cost. */
 function GenerationLine({ g, edited }: { g: Generation; edited: boolean }) {
   const parts = [
     g.model,
-    g.inputTokens !== undefined && `${tokens(g.inputTokens)} in / ${tokens(g.outputTokens ?? 0)} out`,
-    g.costUsd !== undefined && (g.costUsd > 0 && g.costUsd < 0.01 ? '<$0.01' : `$${g.costUsd.toFixed(2)}`),
+    g.inputTokens !== undefined && `${fmtTokens(g.inputTokens)} in / ${fmtTokens(g.outputTokens ?? 0)} out`,
+    g.costUsd !== undefined && (g.costEstimated ? `≈${fmtUsd(g.costUsd)} API-equivalent` : fmtUsd(g.costUsd)),
     g.durationMs !== undefined && `${Math.round(g.durationMs / 1000)}s`,
     g.repairs ? `${g.repairs} repair${g.repairs > 1 ? 's' : ''}` : null,
     g.nodesInJob ? `shared by ${g.nodesInJob} nodes` : null,
@@ -766,6 +766,30 @@ function GenerationLine({ g, edited }: { g: Generation; edited: boolean }) {
     <p className="panel__generation muted small" title={`Generated ${new Date(g.at).toLocaleString()} (${g.jobType})`}>
       ✍️ {parts.join(' · ')}
       {edited && ' · edited since'}
+    </p>
+  );
+}
+
+/**
+ * Everything this node has cost: its share of every job that wrote it, plus reviews and failed rewrites.
+ * Hidden while it says no more than the generation line (one write, nothing else).
+ */
+function SpentLine({ spent, g }: { spent: UsageTotals; g?: Generation }) {
+  const latestShare = g?.inputTokens !== undefined ? 1 / (g.nodesInJob ?? 1) : 0;
+  if (spent.jobs <= latestShare + 1e-6) return null;
+  const estimated = spent.estimatedUsd ?? 0;
+  const parts = [
+    `${fmtTokens(spent.inputTokens)} in / ${fmtTokens(spent.outputTokens)} out`,
+    spent.costUsd > 0 && fmtUsd(spent.costUsd),
+    estimated > 0 && `≈${fmtUsd(estimated)} API-equivalent`,
+    spent.unpriced > 1e-6 && 'some unpriced',
+  ].filter(Boolean);
+  return (
+    <p
+      className="panel__generation muted small"
+      title="This event's share of every job that wrote, rewrote or reviewed it, failed attempts included. A job that wrote several events splits its cost between them. ≈ is what the Claude Code worker's tokens would cost at Claude API list prices; a Pro or Max plan is not billed per token."
+    >
+      🪙 All jobs so far: {parts.join(' · ')}
     </p>
   );
 }
