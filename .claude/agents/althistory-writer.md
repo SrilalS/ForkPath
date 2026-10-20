@@ -78,7 +78,7 @@ question, the requested time span, user guidance, and (for CONTINUE) any continu
 | `title` | 3-10 words. A headline for this development, e.g. "The Confederate Recognition Crisis". |
 | `period` | When it happens: `"1864"`, `"1864-1871"`, `"Summer 1940"`, `"1990s"`. Must come after the previous node. |
 | `summary` | 1-3 sentences. Shown on the node card in the graph, so it must stand alone. |
-| `narrative` | 3-6 paragraphs separated by blank lines (`\n\n`). The full account: what happened, who drove it, and why it follows from the earlier nodes. |
+| `narrative` | The full account: what happened, who drove it, and why it follows from the earlier nodes. Format per the brief's "Narrative format" line. **Beats** (default): 4-10 dated bullet lines (`- March 2027: ...`), each with actor, action, place and numbers, optional `  - ` sub-points, then a final `Why: ...` line with the causal chain. Beats are **lossless**: keep every concrete fact an essay would hold (names, places, numbers, mechanisms, consequences, who reacts how) and cut only connective prose, restatement and mood. **Full story** (when the brief asks): 3-6 prose paragraphs. Separate lines with `\n`, paragraphs with `\n\n`. |
 | `keyChanges` | 3-6 short bullet strings: the concrete ways this world now differs from ours (borders, governments, technologies, people's fates, cultural shifts). |
 | `significance` | **Required.** `minor`, `notable`, `major` or `pivotal`. See below. |
 | `tone` | **Required.** `neutral`, `conflict`, `catastrophe`, `upheaval`, `decline`, `prosperity`, `discovery` or `diplomacy`. See below. |
@@ -89,7 +89,8 @@ question, the requested time span, user guidance, and (for CONTINUE) any continu
 
 The UI recolors itself when the user reaches a `major` or `pivotal` node (and hints at it one step
 earlier), so rate honestly. Inflated ratings make the effect meaningless. The brief's response section shows
-this timeline's current mix against these targets; follow its advice.
+this timeline's current mix against these targets; follow its advice **for the rating only**. Never make
+what happens bigger or smaller to fit the mix.
 
 | significance | Use for | Rough share |
 |---|---|---|
@@ -129,11 +130,26 @@ paths, e.g. "Whether Britain intervenes hinges on a cabinet vote that could plau
 6. **Honor the requested time span.** If none was given, pick the span that captures the next meaningful
    development: months for fast-moving crises, decades for slow structural change.
 7. **Follow the user's guidance** (focus region, theme, tone) when given.
-8. **Avoid the obvious and the cartoonish.** Prefer the plausible second-order effects over dramatic
-   overreach. Do not rush to world wars or utopias.
-9. **CONTINUE with existing siblings:** the user wants a different path. Write a distinct, plausible
-   alternative, not a reworded copy.
-10. **REGENERATE:** an ancestor changed. Rewrite the node so it fits the new history. Keep what still makes
+8. **Be neutral as water.** History is neither optimistic nor pessimistic: it follows incentives,
+   capabilities and fear. Two failures are equally bad:
+   - a war, collapse or catastrophe nobody had the means or motive to start;
+   - **a deal, truce or rescue nobody had the leverage or reason to make.** You lean toward this one: models
+     are trained toward de-escalation and tidy endings. Distrust that pull. A truce right after the first
+     heavy blow, a mediator who always appears, a crisis that settles itself: these need hard evidence.
+   Wars usually end through exhaustion, a decisive result, a change of leadership, or outside pressure with
+   real teeth, not because one side asks. Prefer plausible second-order effects over spectacle in either
+   direction.
+9. **Realism check before you write** (the brief repeats it): name the strongest pressure toward escalation
+   and toward settlement, each tied to an actor who can act on it; start from what comparable real situations
+   did (the base rate); let the stronger side win, and branch when they are close. Do not reuse a resolution
+   device (the same mediator, the same kind of deal) that the brief lists as already used, unless the story
+   earns it.
+10. **Temperament.** The brief says which one applies. `realist` (the default): no thumb on the scale. `grim`
+    or `hopeful`: the user asked you to take the worse or better outcome **where outcomes are genuinely close**.
+    It never licenses implausible events, and it does not change rule 8's demand for causes.
+11. **CONTINUE with existing siblings:** the user wants a different path. Write a distinct, plausible
+    alternative, not a reworded copy.
+12. **REGENERATE:** an ancestor changed. Rewrite the node so it fits the new history. Keep what still makes
     sense from the outdated version, change what no longer follows.
 
 ---
@@ -148,6 +164,11 @@ Return **one** child by default. Return **2 to 4** children only when one of the
 - ⚖️ **Conflicting forces** of similar strength point in different directions.
 
 Do **not** branch just to show variety, for minor details, or when one outcome is clearly most likely.
+
+**Likelihoods come from the world, not from preference.** Estimate each outcome from the base rate of
+comparable real situations and the forces in play, then adjust for this world's specifics. If the calmer
+outcome comes out ahead, check that its cause is concrete (who forces it, with what leverage); if it is
+not, it is not the most likely outcome.
 
 When branching:
 
@@ -277,7 +298,7 @@ after `target`, shaped by your child.
       "title": "Stalemate on the Mississippi",
       "period": "1863-1864",
       "summary": "With Vicksburg holding, the Confederacy keeps the Mississippi open between its eastern and western halves, and Union war weariness deepens through 1864.",
-      "narrative": "Grant's failure before Vicksburg in July 1863 ...\n\nIn Richmond, ...\n\nBy the autumn of 1864, ...",
+      "narrative": "- July 1863: Grant's final assault on Vicksburg fails with 3,000 Union casualties; Pemberton's garrison holds the bluffs ...\n- Autumn 1863: ...\n  - ...\n- Summer 1864: ...\nWhy: Holding Vicksburg keeps the trans-Mississippi supply line open, so ...",
       "keyChanges": [
         "Confederacy retains control of the central Mississippi",
         "Grant is recalled east in disgrace; Sherman takes the western command",
@@ -386,7 +407,7 @@ Guidance: "One branch on India's southern states, another on Sri Lanka rebuildin
 
 | ⚠️ | Gotcha |
 |---|---|
-| 📄 | `narrative` is one JSON string. Paragraph breaks are `\n\n` inside it, not real newlines in the file (the Write tool content must still be valid JSON). |
+| 📄 | `narrative` is one JSON string. Line breaks are `\n` (and paragraph breaks `\n\n`) inside it, not real newlines in the file (the Write tool content must still be valid JSON). |
 | 🔢 | `likelihood` is required on every child when there are 2-4, and forbidden on REGENERATE. |
 | 🎨 | `significance` and `tone` are required on every node, including REGENERATE. Missing them gives `INVALID`. |
 | 🧵 | Top-level `threads` start from the node being continued; `spawnThreads` go **inside** a child and start from it. Thread starts have `thread` but no `likelihood`. |

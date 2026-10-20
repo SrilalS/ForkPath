@@ -11,6 +11,12 @@ const activeEngine = () => getConfig().engine;
 const JOBS_FILE = path.join(DATA_DIR, 'jobs.json');
 /** A claimed job with no result after this long goes back to pending (worker crashed or lost it). */
 const CLAIM_TIMEOUT_MS = 20 * 60_000;
+/**
+ * A claim whose brief nobody fetched within this long goes back to pending. With --id-only the writer fetches
+ * the brief seconds after the claim; when that never happens, the claim most likely went to a poll left
+ * running by a worker session that was stopped (its next.mjs outlives it by up to 9 minutes).
+ */
+const DELIVERY_TIMEOUT_MS = 3 * 60_000;
 /** The worker counts as online for this long after its last poll ended. */
 const ONLINE_GRACE_MS = 20_000;
 const KEEP_FINISHED = 200;
@@ -102,12 +108,18 @@ onConfigChange(() => {
 });
 
 setInterval(() => {
-  // Requeue abandoned claims.
+  // Requeue abandoned claims: never delivered (a poll from a stopped session), or delivered but never finished.
   let changed = false;
   for (const job of jobs.values()) {
-    if (job.status === 'claimed' && Date.now() - Date.parse(job.claimedAt!) > CLAIM_TIMEOUT_MS) {
+    if (job.status !== 'claimed') continue;
+    const age = Date.now() - Date.parse(job.claimedAt!);
+    const undelivered = !job.deliveredAt && age > DELIVERY_TIMEOUT_MS;
+    if (undelivered || age > CLAIM_TIMEOUT_MS) {
+      console.log(`[jobs] ${job.id} back in the queue: ${undelivered ? 'nobody fetched its brief' : 'no result in time'}`);
       job.status = 'pending';
       job.claimedAt = undefined;
+      job.claimedBy = undefined;
+      job.deliveredAt = undefined;
       changed = true;
     }
   }
@@ -157,9 +169,17 @@ function claim(job: Job, by: NonNullable<Job['claimedBy']>): Job {
   job.status = 'claimed';
   job.claimedAt = now();
   job.claimedBy = by;
+  job.deliveredAt = undefined;
   persist();
   broadcastStatus();
   return job;
+}
+
+/** The claimant has the brief: from now on only the long claim timeout applies. */
+export function markDelivered(job: Job) {
+  if (job.status !== 'claimed' || job.deliveredAt) return;
+  job.deliveredAt = now();
+  persist();
 }
 
 function wakeWaiter() {
@@ -175,7 +195,10 @@ function wakeWaiter() {
 export function claimForBuiltin(): Job | undefined {
   if (activeEngine() !== 'builtin') return undefined;
   const job = oldestPending();
-  return job && claim(job, 'builtin');
+  if (!job) return undefined;
+  claim(job, 'builtin');
+  markDelivered(job); // the runner builds the brief itself, in this process
+  return job;
 }
 
 /** Puts a claimed job back in the queue (the runner stopped before finishing it). */
@@ -184,6 +207,7 @@ export function releaseJob(job: Job) {
   job.status = 'pending';
   job.claimedAt = undefined;
   job.claimedBy = undefined;
+  job.deliveredAt = undefined;
   persist();
   wakeWaiter();
   queueChanged();

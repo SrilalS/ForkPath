@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Generation, Timeline, TLNode } from '../../../shared/types.ts';
+import type { Detail, Generation, Temperament, Timeline, TLNode } from '../../../shared/types.ts';
 import { api, type GenerateOptions } from '../api.ts';
-import { GenerateOptionsFields } from './forms.tsx';
+import { DETAIL_INFO, DetailField, GenerateOptionsFields, TEMPERAMENT_INFO, TemperamentField } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
 import {
@@ -269,11 +269,7 @@ export function NodePanel({
                 {node.narrative && (
                   <section className="panel__section">
                     <h3>{node.kind === 'deviation' ? 'Detail' : 'Narrative'}</h3>
-                    <div className="narrative">
-                      {node.narrative.split(/\n\s*\n/).map((p, i) => (
-                        <p key={i}>{p}</p>
-                      ))}
-                    </div>
+                    <Narrative text={node.narrative} />
                   </section>
                 )}
               </>
@@ -338,8 +334,8 @@ export function NodePanel({
           busy={busy}
           stale={node.stale}
           onCancel={() => setMode('view')}
-          onSubmit={async (guidance) => {
-            const ok = await run(() => api.regenerate(timeline.id, node.id, { guidance }));
+          onSubmit={async (guidance, temperament, detail) => {
+            const ok = await run(() => api.regenerate(timeline.id, node.id, { guidance, temperament, detail }));
             if (ok) setMode('view');
           }}
         />
@@ -428,15 +424,17 @@ function RegenerateForm({
   busy: boolean;
   stale: boolean;
   onCancel: () => void;
-  onSubmit: (guidance: string) => void;
+  onSubmit: (guidance: string, temperament: Temperament, detail: Detail) => void;
 }) {
   const [guidance, setGuidance] = useState('');
+  const [temperament, setTemperament] = useState<Temperament>('realist');
+  const [detail, setDetail] = useState<Detail>('beats');
   return (
     <form
       className="panel__continue form"
       onSubmit={(e) => {
         e.preventDefault();
-        onSubmit(guidance.trim());
+        onSubmit(guidance.trim(), temperament, detail);
       }}
     >
       <h3>Regenerate this node</h3>
@@ -457,10 +455,12 @@ function RegenerateForm({
           value={guidance}
           onChange={(e) => setGuidance(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(guidance.trim());
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(guidance.trim(), temperament, detail);
           }}
         />
       </label>
+      <TemperamentField value={temperament} onChange={setTemperament} />
+      <DetailField value={detail} onChange={setDetail} />
       <div className="form__actions">
         <button type="button" className="btn btn--ghost" onClick={onCancel}>
           Cancel
@@ -508,6 +508,85 @@ function ContinueForm({
   );
 }
 
+type Beat = { text: string; sub: string[] };
+type Block = { kind: 'beats'; beats: Beat[] } | { kind: 'why'; text: string } | { kind: 'para'; text: string };
+
+/** Splits a narrative into prose paragraphs, beat lists ("- ...", "  - ...") and a closing "Why:" line. */
+function parseNarrative(text: string): Block[] {
+  const blocks: Block[] = [];
+  let para: string[] = [];
+  const flush = () => {
+    if (para.length) blocks.push({ kind: 'para', text: para.join(' ') });
+    para = [];
+  };
+  for (const raw of text.split('\n')) {
+    const line = raw.trimEnd();
+    const sub = line.match(/^\s{2,}[-*]\s+(.*)$/);
+    const beat = line.match(/^[-*]\s+(.*)$/);
+    const last = blocks.at(-1);
+    if (sub && last?.kind === 'beats' && !para.length) {
+      last.beats.at(-1)!.sub.push(sub[1]);
+    } else if (beat) {
+      flush();
+      if (last?.kind === 'beats') last.beats.push({ text: beat[1], sub: [] });
+      else blocks.push({ kind: 'beats', beats: [{ text: beat[1], sub: [] }] });
+    } else if (/^why:/i.test(line.trim())) {
+      flush();
+      blocks.push({ kind: 'why', text: line.trim().replace(/^why:\s*/i, '') });
+    } else if (!line.trim()) {
+      flush();
+    } else {
+      para.push(line.trim());
+    }
+  }
+  flush();
+  return blocks;
+}
+
+/** A beat's leading date ("March 2027: ...") in bold, when it has one. */
+function BeatText({ text }: { text: string }) {
+  const m = text.match(/^([^:]{2,32}):\s+(.*)$/);
+  return m ? (
+    <>
+      <strong className="narrative__when">{m[1]}:</strong> {m[2]}
+    </>
+  ) : (
+    <>{text}</>
+  );
+}
+
+/** Narratives come as beats (dated bullet lines plus "Why:") or as prose paragraphs; both render here. */
+function Narrative({ text }: { text: string }) {
+  return (
+    <div className="narrative">
+      {parseNarrative(text).map((b, i) =>
+        b.kind === 'beats' ? (
+          <ul key={i} className="narrative__beats">
+            {b.beats.map((beat, j) => (
+              <li key={j}>
+                <BeatText text={beat.text} />
+                {beat.sub.length > 0 && (
+                  <ul>
+                    {beat.sub.map((s, k) => (
+                      <li key={k}>{s}</li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : b.kind === 'why' ? (
+          <p key={i} className="narrative__why">
+            <strong>Why:</strong> {b.text}
+          </p>
+        ) : (
+          <p key={i}>{b.text}</p>
+        ),
+      )}
+    </div>
+  );
+}
+
 const tokens = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /** Which engine and model wrote this node, and for the built-in engine what it cost. */
@@ -519,6 +598,8 @@ function GenerationLine({ g, edited }: { g: Generation; edited: boolean }) {
     g.durationMs !== undefined && `${Math.round(g.durationMs / 1000)}s`,
     g.repairs ? `${g.repairs} repair${g.repairs > 1 ? 's' : ''}` : null,
     g.nodesInJob ? `shared by ${g.nodesInJob} nodes` : null,
+    g.temperament ? `${TEMPERAMENT_INFO[g.temperament].icon} ${TEMPERAMENT_INFO[g.temperament].label.toLowerCase()}` : null,
+    g.detail === 'story' ? `${DETAIL_INFO.story.icon} full story` : null,
   ].filter(Boolean);
   return (
     <p className="panel__generation muted small" title={`Generated ${new Date(g.at).toLocaleString()} (${g.jobType})`}>

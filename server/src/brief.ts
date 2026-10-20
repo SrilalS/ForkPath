@@ -1,4 +1,4 @@
-import { SIGNIFICANCES, type Job, type Significance, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
+import { SIGNIFICANCES, type Job, type Significance, type Strength, type Temperament, type Timeline, type TLNode } from '../../shared/types.ts';
 import {
   ancestorIds,
   effectiveYear,
@@ -10,8 +10,11 @@ import {
 import { childrenOf, pathTo } from './store.ts';
 import { MAX_FOLLOW_UPS } from './schema.ts';
 
-/** Ancestors this close to the target get their full narrative; older ones only the summary. */
-const FULL_NARRATIVE_DEPTH = 3;
+/**
+ * Only the node being continued gets its full narrative in the brief; earlier ones show summary and key
+ * changes, which carry their facts. (Three full narratives cost ~2k input tokens per job for little gain.)
+ */
+const FULL_NARRATIVE_DEPTH = 1;
 /** At most this many nearby events from other streams are listed, the closest in time first. */
 const MAX_NEARBY = 8;
 
@@ -200,11 +203,15 @@ export function calibrationLines(tl: Timeline, exclude: string): string[] {
   const highTarget = SIGNIFICANCE_TARGET.major + SIGNIFICANCE_TARGET.pivotal;
   const advice =
     high > highTarget + 0.1
-      ? 'Major and pivotal are over-used here. Rate this major only if it reshapes a whole region or field; otherwise notable or minor.'
+      ? 'Major and pivotal ratings are over-used here: rate this node major only if it reshapes a whole region or field.'
       : high < highTarget - 0.15
-        ? 'Major and pivotal are rare here. Do not hold back when this development genuinely reshapes a region or era.'
+        ? 'Major and pivotal ratings are rare here: do not hold back when this development genuinely reshapes a region or era.'
         : 'The mix is on target; keep rating each node on its own merits.';
-  return [`Significance so far in this timeline (${rated.length} events): ${mix.join(', ')}.`, advice];
+  return [
+    `Significance so far in this timeline (${rated.length} events): ${mix.join(', ')}.`,
+    // The mix is about labels. Without this, "over-used" can read as "write calmer events".
+    `${advice} This is about the RATING only: never make what happens bigger or smaller to fit the mix.`,
+  ];
 }
 
 /**
@@ -241,7 +248,8 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
   const linkHint =
     'Optional on any node you write: "influences" / "influencedBy": [ { "node": "<existing id or @key>", "strength": "mild", "note": "" } ]. ' +
     'Give a node "key": "india" so other nodes in this same result can link to it as "@india".';
-  const node = '"title": "", "period": "", "summary": "", "narrative": "", "keyChanges": [""], "significance": "notable", "tone": "neutral"';
+  const narrative = job.detail === 'story' ? '' : '- <when>: <who did what, where, with numbers>\\n- ...\\nWhy: <the causal chain>';
+  const node = `"title": "", "period": "", "summary": "", "narrative": "${narrative}", "keyChanges": [""], "significance": "notable", "tone": "neutral"`;
   const example =
     job.type === 'influence'
       ? `{ "children": [ { ${node}, "influences": [], "influencedBy": [] } ], "influenceNote": "" }`
@@ -250,6 +258,7 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
         : `{ "node": { ${node}, "influences": [], "influencedBy": [] } }`;
   const lines = [
     ...searchSection(job, mode),
+    ...realismLines(tl, job),
     '',
     '## Your response',
     mode === 'api'
@@ -310,6 +319,55 @@ function followUpLines(job: Job): string[] {
   ];
 }
 
+const TEMPERAMENT_TEXT: Record<Temperament, string> = {
+  realist:
+    'realist (default). No thumb on the scale: the actors\' incentives, capabilities and historical base rates decide. ' +
+    'Not optimistic, not pessimistic.',
+  grim:
+    'grim (chosen by the user for this request). Where outcomes are genuinely close, take the worse one: escalation over restraint, ' +
+    'miscalculation over caution, deals that fail or never form. Stay plausible: grim, not cartoonish.',
+  hopeful:
+    'hopeful (chosen by the user for this request). Where outcomes are genuinely close, take the better one: restraint, cooperation, ' +
+    'recovery, but only where actors have real reasons and leverage to choose it. Stay plausible: hopeful, not utopian.',
+};
+
+const temperamentLine = (job: Job) => `Temperament: ${TEMPERAMENT_TEXT[job.temperament ?? 'realist']}`;
+
+/** How to write the narrative field. Beats must keep everything an essay would: only filler goes. */
+const narrativeFormatLine = (job: Job) =>
+  job.detail === 'story'
+    ? 'Narrative format: full story (chosen by the user for this request): 3-6 paragraphs of prose separated by blank lines.'
+    : 'Narrative format: beats (default). 4-10 dated bullet lines ("- March 2027: ..."), each naming the actor, the action, the place and any numbers; ' +
+      'add "  - " sub-points for supporting detail. End with a line starting "Why:" giving the causal chain (1-3 sentences). ' +
+      'Beats must keep EVERY concrete fact an essay would hold (names, places, numbers, mechanisms, consequences, who reacts how): ' +
+      'cut only connective prose, restatement and mood.';
+
+/**
+ * Counterweight to the model's pull toward tidy, peaceful resolutions: makes it name the forces on both
+ * sides, start from what comparable real situations did, and justify any settlement. Lives in the brief
+ * (not only the writer instructions) so it applies even to a worker session started before a change.
+ */
+function realismLines(tl: Timeline, job: Job): string[] {
+  const settled = Object.values(tl.nodes)
+    .filter((n) => n.kind === 'event' && n.status === 'ready' && n.tone === 'diplomacy' && n.id !== job.placeholderId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 6);
+  return [
+    '',
+    '## Before you write: realism check (keep it to yourself, do not put it in the JSON)',
+    '- Forces: name the strongest pressure toward escalation and the strongest toward settlement, each tied to a real actor with the means to act. The stronger side wins; if they are close, that is a reason to branch.',
+    '- Base rate: what did comparable real situations actually do over the span you cover? Start from that, not from what feels hopeful or dramatic.',
+    '- A settlement must show who forced it, with what leverage, and why each side accepts it now. Wars rarely stop at their first heavy blow; they end through exhaustion, a decisive result, a change of leadership, or outside pressure with real teeth.',
+    '- An escalation needs means and motive just the same: no war that nobody would fight.',
+    ...(settled.length
+      ? [
+          `- Settlements already in this timeline (newest first): ${settled.map((n) => `"${n.title}" (${n.period || 'no date'})`).join('; ')}. ` +
+            'Do not reach for the same kind of fix (the same mediator, the same deal) unless the story truly earns it.',
+        ]
+      : []),
+  ];
+}
+
 const STRENGTH_MEANING: Record<Strength, string> = {
   mild: 'it nudges this stream',
   moderate: 'it clearly shapes this stream',
@@ -332,6 +390,8 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       `Timeline: "${tl.title}"`,
       `Task: write what happens NEXT after node ${chain.length} ("${chain.at(-1)!.title}").`,
       timeSpanLine(job),
+      temperamentLine(job),
+      narrativeFormatLine(job),
       `User guidance: ${job.guidance?.trim() || 'none'}`,
       '',
       '## Timeline so far (oldest first, the last entry is the node you continue from)',
@@ -363,6 +423,8 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       'Treat every branch as having happened in the same world (parallel threads, e.g. different regions or themes).',
       'Where they contradict, resolve it explicitly in the narrative, favoring Branch A unless the user guidance says otherwise.',
       timeSpanLine(job),
+      temperamentLine(job),
+      narrativeFormatLine(job),
       `User guidance: ${job.guidance?.trim() || 'none'}`,
       '',
       '## Branch A: the full timeline from the point of divergence (oldest first)',
@@ -395,6 +457,8 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
         'The effect must be visible in the title or summary, and explained in the narrative.',
       'Both events happened in the same world. The new node starts no earlier than either of them.',
       timeSpanLine(job),
+      temperamentLine(job),
+      narrativeFormatLine(job),
       job.followUpDepth
         ? `Guidance from the writer who requested this follow-up: ${job.guidance?.trim() || 'none'}`
         : `User guidance: ${job.guidance?.trim() || 'none'}`,
@@ -433,6 +497,8 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
       'Task: an earlier node was edited, so this node is out of date. Rewrite it so it follows from the timeline below.',
       `Keep roughly the same time period (${target.period || 'unspecified'}) unless the changes make that impossible.`,
       `User guidance: ${job.guidance?.trim() || 'none'}`,
+      temperamentLine(job),
+      narrativeFormatLine(job),
       '',
       `## ${target.mergeParents?.length ? 'Branch A: timeline' : 'Timeline'} up to this node (oldest first)`,
       chainSection(tl, chain),

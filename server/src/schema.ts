@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SIGNIFICANCES, STRENGTHS, TONES } from '../../shared/types.ts';
+import { DETAILS, SIGNIFICANCES, STRENGTHS, TEMPERAMENTS, TONES } from '../../shared/types.ts';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const significance = z.enum(SIGNIFICANCES);
@@ -137,6 +137,8 @@ export const nodeEdit = z.object({
 export const generateOptions = z.object({
   timeSpan: z.string().trim().max(80).optional(),
   guidance: z.string().trim().max(1000).optional(),
+  temperament: z.enum(TEMPERAMENTS).optional(),
+  detail: z.enum(DETAILS).optional(),
 });
 
 export const influenceInput = generateOptions.extend({

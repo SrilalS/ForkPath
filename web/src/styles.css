@@ -473,10 +473,12 @@ textarea:focus {
   position: absolute;
   top: 14px;
   left: 16px;
-  right: 16px;
+  /* Stops at the side panel (--panel-space is set on .main while it is open) instead of running under it. */
+  right: calc(16px + var(--panel-space, 0px));
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
   pointer-events: none;
   z-index: 5;
 }
@@ -511,7 +513,10 @@ textarea:focus {
 }
 .topbar__stats {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  max-width: 100%;
+  white-space: nowrap;
   gap: 6px;
   font-size: 12.5px;
   color: var(--text-2);
@@ -519,7 +524,8 @@ textarea:focus {
   backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   padding: 4px 4px 4px 12px;
-  border-radius: 999px;
+  /* Pill-shaped on one row, a rounded box when it wraps beside an open panel. */
+  border-radius: 18px;
 }
 .topbar__stats > span + span::before {
   content: '·';
@@ -863,9 +869,15 @@ textarea:focus {
 }
 .panel__meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
+  min-width: 0;
   font-size: 13px;
+}
+/* Chips wrap to the next line as a whole instead of breaking inside ("Major ·" / "Diplomacy"). */
+.panel__meta > * {
+  white-space: nowrap;
 }
 .panel__scroll {
   flex: 1;
@@ -927,6 +939,36 @@ textarea:focus {
   margin: 0 0 12px;
   line-height: 1.7;
   color: #dcdeec;
+}
+.narrative__beats {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: #dcdeec;
+  line-height: 1.6;
+}
+.narrative__beats > li {
+  margin-bottom: 8px;
+}
+.narrative__beats li::marker {
+  color: var(--accent-soft);
+}
+.narrative__beats ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--text-2);
+}
+.narrative__beats ul li {
+  margin-bottom: 3px;
+}
+.narrative__when {
+  color: var(--text);
+  font-weight: 600;
+}
+.narrative__why {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent-soft);
 }
 .panel__nav {
   display: flex;
@@ -1237,6 +1279,10 @@ textarea:focus {
   .topbar__stats {
     display: none;
   }
+  /* The panel covers the whole width here, so the top bar keeps its full width (the panel sits above it). */
+  .topbar {
+    right: 16px;
+  }
 }
 
 /* ---- significance & mood ---------------------------------------------- */
@@ -1287,6 +1333,7 @@ textarea:focus {
   color: color-mix(in oklab, var(--mood) 60%, white);
   font-size: 12.5px;
   font-weight: 600;
+  white-space: nowrap;
   backdrop-filter: blur(8px);
   cursor: pointer;
   animation: rise 0.35s ease-out;

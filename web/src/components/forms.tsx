@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import type { DeviationInput, GenerateOptions } from '../api.ts';
-import { STRENGTHS, type Strength } from '../../../shared/types.ts';
+import { DETAILS, STRENGTHS, TEMPERAMENTS, type Detail, type Strength, type Temperament } from '../../../shared/types.ts';
 
 export const SPAN_PRESETS = ['Auto', '1 year', '5 years', '10 years', '25 years', '50 years', '100 years'];
 
@@ -28,7 +28,54 @@ export function Modal({ title, subtitle, onClose, children }: { title: string; s
   );
 }
 
-/** Time span chips plus a custom value and optional guidance. */
+export const TEMPERAMENT_INFO: Record<Temperament, { label: string; icon: string; hint: string }> = {
+  realist: { label: 'Realist', icon: '⚖️', hint: 'No lean: incentives, capabilities and how comparable real situations went decide.' },
+  grim: { label: 'Grim', icon: '🌑', hint: 'Where outcomes are close, the worse one: escalation, miscalculation, deals that fail.' },
+  hopeful: { label: 'Hopeful', icon: '🌤️', hint: 'Where outcomes are close, the better one: restraint and cooperation that actors can actually back.' },
+};
+
+/** How the writer leans on close calls, for this one request. Realist is the default. */
+export function TemperamentField({ value, onChange }: { value: Temperament | undefined; onChange: (t: Temperament) => void }) {
+  const current = value ?? 'realist';
+  return (
+    <label className="field">
+      <span className="field__label">Temperament</span>
+      <div className="chips">
+        {TEMPERAMENTS.map((t) => (
+          <button type="button" key={t} className={`chip ${current === t ? 'is-active' : ''}`} onClick={() => onChange(t)} title={TEMPERAMENT_INFO[t].hint}>
+            {TEMPERAMENT_INFO[t].icon} {TEMPERAMENT_INFO[t].label}
+          </button>
+        ))}
+      </div>
+      <span className="field__hint">{TEMPERAMENT_INFO[current].hint}</span>
+    </label>
+  );
+}
+
+export const DETAIL_INFO: Record<Detail, { label: string; icon: string; hint: string }> = {
+  beats: { label: 'Beats', icon: '📌', hint: 'Dated bullet points with every fact kept, plus a "Why" line. Easier to scan and edit.' },
+  story: { label: 'Full story', icon: '📖', hint: 'Flowing prose paragraphs: the same facts, read like a history book.' },
+};
+
+/** Narrative format for this one request. Beats is the default. */
+export function DetailField({ value, onChange }: { value: Detail | undefined; onChange: (d: Detail) => void }) {
+  const current = value ?? 'beats';
+  return (
+    <label className="field">
+      <span className="field__label">Narrative</span>
+      <div className="chips">
+        {DETAILS.map((d) => (
+          <button type="button" key={d} className={`chip ${current === d ? 'is-active' : ''}`} onClick={() => onChange(d)} title={DETAIL_INFO[d].hint}>
+            {DETAIL_INFO[d].icon} {DETAIL_INFO[d].label}
+          </button>
+        ))}
+      </div>
+      <span className="field__hint">{DETAIL_INFO[current].hint}</span>
+    </label>
+  );
+}
+
+/** Time span chips plus a custom value, optional guidance, the temperament and the narrative format. */
 export function GenerateOptionsFields({ value, onChange }: { value: GenerateOptions; onChange: (v: GenerateOptions) => void }) {
   const span = value.timeSpan ?? '';
   const isPreset = span === '' || SPAN_PRESETS.includes(span);
@@ -74,11 +121,13 @@ export function GenerateOptionsFields({ value, onChange }: { value: GenerateOpti
         </span>
         <textarea
           rows={2}
-          placeholder="e.g. focus on Asia, follow the economic fallout, keep it grim"
+          placeholder="e.g. focus on Asia, follow the economic fallout"
           value={value.guidance ?? ''}
           onChange={(e) => onChange({ ...value, guidance: e.target.value })}
         />
       </label>
+      <TemperamentField value={value.temperament} onChange={(temperament) => onChange({ ...value, temperament })} />
+      <DetailField value={value.detail} onChange={(detail) => onChange({ ...value, detail })} />
     </>
   );
 }

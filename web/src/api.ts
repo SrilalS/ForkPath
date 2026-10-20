@@ -1,4 +1,4 @@
-import type { InfluenceLink, Strength, Timeline, TimelineSummary, TLNode, WorkerStatus } from '../../shared/types.ts';
+import type { Detail, InfluenceLink, Strength, Temperament, Timeline, TimelineSummary, TLNode, WorkerStatus } from '../../shared/types.ts';
 
 export interface DeviationInput {
   title: string;
@@ -12,6 +12,10 @@ export interface DeviationInput {
 export interface GenerateOptions {
   timeSpan?: string;
   guidance?: string;
+  /** Lean for close calls; omitted means realist. */
+  temperament?: Temperament;
+  /** Narrative format; omitted means beats. */
+  detail?: Detail;
 }
 
 export type NodeEdit = Partial<

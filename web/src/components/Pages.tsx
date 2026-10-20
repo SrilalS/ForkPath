@@ -135,7 +135,8 @@ export function GuidePage() {
           </Term>
           <Term name="Event">
             A card the model wrote. It has a <em>title</em>, a <em>period</em> (when it happens), a <em>summary</em> (shown on
-            the card), a <em>narrative</em> (the full account, in the side panel) and <em>key changes</em> (how this world now
+            the card), a <em>narrative</em> (the full account in the side panel: dated beats with a closing &quot;Why&quot;, or prose
+            if you asked for a full story) and <em>key changes</em> (how this world now
             differs from ours).
           </Term>
           <Term name="Branch" sample={<span className="tl-chip">Deviation</span>}>
@@ -200,7 +201,11 @@ export function GuidePage() {
           </div>
           {(
             [
-              ['▶️ Continue', '+ on a card, or side panel', 'The model writes the next event. Optional time span (or Auto) and guidance.'],
+              [
+                '▶️ Continue',
+                '+ on a card, or side panel',
+                'The model writes the next event. Optional time span (or Auto), guidance, temperament (Realist by default; Grim or Hopeful tip close calls) and narrative format (dated Beats by default, or Full story).',
+              ],
               ['🔁 Continue another way', 'Side panel, on a card that already continues', 'Another possible next event; the model sees the existing ones and writes something different.'],
               ['🌿 Branch here', 'Side panel', 'You describe a new change at this point. Choose Alternative (a separate branch) or Parallel thread.'],
               ['✏️ Edit', 'Side panel', 'Rewrite any field. Later events and the events this one influences are marked stale. Re-rating significance or tone does not.'],

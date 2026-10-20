@@ -78,6 +78,20 @@ export interface TLNode {
   updatedAt: string;
 }
 
+/**
+ * How the writer leans when outcomes are close, chosen per request. 'realist' (the default) puts no thumb
+ * on the scale: incentives, capabilities and historical base rates decide.
+ */
+export const TEMPERAMENTS = ['realist', 'grim', 'hopeful'] as const;
+export type Temperament = (typeof TEMPERAMENTS)[number];
+
+/**
+ * Narrative format, chosen per request. 'beats' (the default): dated bullet points that keep every fact an
+ * essay would hold, plus a closing "Why:" line. 'story': flowing prose paragraphs.
+ */
+export const DETAILS = ['beats', 'story'] as const;
+export type Detail = (typeof DETAILS)[number];
+
 /** Which engine and model wrote a node. Token and cost fields are only known for the built-in engine. */
 export interface Generation {
   engine: 'external' | 'builtin';
@@ -95,6 +109,10 @@ export interface Generation {
   repairs?: number;
   /** Nodes written by the same job; tokens and cost are for the whole job, shared by all of them. */
   nodesInJob?: number;
+  /** Set when the request asked for a lean other than realist. */
+  temperament?: Temperament;
+  /** Set when the request asked for prose instead of beats. */
+  detail?: Detail;
 }
 
 export const STRENGTHS = ['mild', 'moderate', 'strong'] as const;
@@ -159,11 +177,20 @@ export interface Job {
   followUpDepth?: number;
   timeSpan?: string;
   guidance?: string;
+  /** Lean for close calls; absent means realist. */
+  temperament?: Temperament;
+  /** Narrative format; absent means beats. */
+  detail?: Detail;
   status: JobStatus;
   createdAt: string;
   claimedAt?: string;
   /** Which engine holds the claim: the external worker or the built-in runner. */
   claimedBy?: 'external' | 'builtin';
+  /**
+   * When the claimant actually received the brief. A claim made with --id-only only counts once the writer
+   * fetches the brief; until then it may have gone to a poll whose session is gone.
+   */
+  deliveredAt?: string;
   finishedAt?: string;
   error?: string;
 }

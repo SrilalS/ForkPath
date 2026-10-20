@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
-import { SCHEMA_VERSION, type Generation, type Job, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
+import { SCHEMA_VERSION, type Generation, type Job, type Detail, type Strength, type Temperament, type Timeline, type TLNode } from '../../shared/types.ts';
 import { streamLabel, WorldIndex } from '../../shared/world.ts';
 import { buildExport, exportFileName, importFile } from './transfer.ts';
 import { MigrationError } from './migrate.ts';
@@ -24,6 +24,7 @@ import {
   enqueue,
   finishJob,
   getJob,
+  markDelivered,
   nextJob,
   openJobFor,
   touchWorker,
@@ -116,7 +117,10 @@ const h =
     }
   };
 
-function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; guidance?: string }) {
+/** Jobs store a temperament only when it leans somewhere; realist is the default and stays implicit. */
+const lean = (t?: Temperament) => (t && t !== 'realist' ? t : undefined);
+
+function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail }) {
   if (parent.status !== 'ready') throw new HttpError(409, 'Node is not ready yet');
   const placeholder = makeNode({
     parentId: parent.id,
@@ -134,6 +138,8 @@ function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; 
     placeholderId: placeholder.id,
     timeSpan: opts.timeSpan || undefined,
     guidance: opts.guidance || undefined,
+    temperament: lean(opts.temperament),
+    detail: opts.detail === 'story' ? 'story' : undefined,
   });
   placeholder.jobId = job.id;
   return placeholder;
@@ -144,7 +150,7 @@ function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; 
 const MAX_MERGE_WITH = 4;
 
 /** Queues a convergence node whose parents are `a` (primary) and every node in `others`. */
-function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?: string; guidance?: string }) {
+function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail }) {
   if (!others.length) throw new HttpError(400, 'Pick at least one other node to merge with');
   if (others.length > MAX_MERGE_WITH) throw new HttpError(400, `Merge at most ${MAX_MERGE_WITH + 1} nodes at once`);
   const all = [a, ...others];
@@ -174,6 +180,8 @@ function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?
     placeholderId: placeholder.id,
     timeSpan: opts.timeSpan || undefined,
     guidance: opts.guidance || undefined,
+    temperament: lean(opts.temperament),
+    detail: opts.detail === 'story' ? 'story' : undefined,
   });
   placeholder.jobId = job.id;
   return placeholder;
@@ -190,7 +198,7 @@ function startInfluence(
   tl: Timeline,
   source: TLNode,
   targets: TLNode[],
-  opts: { timeSpan?: string; guidance?: string; strength: Strength; followUpDepth?: number },
+  opts: { timeSpan?: string; guidance?: string; temperament?: Temperament; detail?: Detail; strength: Strength; followUpDepth?: number },
 ) {
   if (source.status !== 'ready') throw new HttpError(409, 'The influencing node is not ready yet');
   if (new Set(targets.map((t) => t.id)).size !== targets.length) throw new HttpError(400, 'Pick each node once');
@@ -220,6 +228,8 @@ function startInfluence(
       placeholderId: placeholder.id,
       timeSpan: opts.timeSpan || undefined,
       guidance: opts.guidance || undefined,
+      temperament: lean(opts.temperament),
+      detail: opts.detail === 'story' ? 'story' : undefined,
     });
     placeholder.jobId = job.id;
     return placeholder;
@@ -256,6 +266,8 @@ function startFollowUps(tl: Timeline, job: Job, requests: ApplyReport['followUps
       const [placeholder] = startInfluence(tl, source, [target], {
         strength: r.strength,
         guidance: r.guidance,
+        temperament: job.temperament,
+        detail: job.detail,
         followUpDepth: (job.followUpDepth ?? 0) + 1,
       });
       queued.push({ id: placeholder.id, stream: streamLabel(tl, target.id) });
@@ -444,7 +456,14 @@ app.post(
     if (node.kind !== 'event') throw new HttpError(400, 'Only generated nodes can be regenerated');
     if (node.status === 'generating') throw new HttpError(409, 'Node is already generating');
     const opts = parse(generateOptions, req.body);
-    const job = enqueue({ type: 'regenerate', timelineId: tl.id, targetNodeId: node.id, guidance: opts.guidance || undefined });
+    const job = enqueue({
+      type: 'regenerate',
+      timelineId: tl.id,
+      targetNodeId: node.id,
+      guidance: opts.guidance || undefined,
+      temperament: lean(opts.temperament),
+      detail: opts.detail === 'story' ? 'story' : undefined,
+    });
     node.status = 'generating';
     node.jobId = job.id;
     node.error = undefined;
@@ -503,6 +522,8 @@ app.post(
       followUpDepth: old.followUpDepth,
       timeSpan: old.timeSpan,
       guidance: old.guidance,
+      temperament: old.temperament,
+      detail: old.detail,
     });
     node.status = 'generating';
     node.jobId = job.id;
@@ -574,10 +595,21 @@ app.get('/api/worker/next', async (req, res) => {
   }
   if (res.writableEnded || res.destroyed) return;
   if (!job) return void res.status(204).end();
+  // With idOnly (the dispatcher hands the job to a writer), the claim counts once the writer fetches the
+  // brief; otherwise the brief is in this response, so it is delivered now.
+  if (req.query.idOnly === '1') return void res.json({ job });
+  markDelivered(job);
   res.json(jobPayload(job.id));
 });
 
-app.get('/api/worker/jobs/:jobId', h((req) => jobPayload(String(req.params.jobId))));
+app.get(
+  '/api/worker/jobs/:jobId',
+  h((req) => {
+    const payload = jobPayload(String(req.params.jobId));
+    markDelivered(payload.job);
+    return payload;
+  }),
+);
 
 /** The job and its timeline, for the worker's search commands. */
 function jobContext(req: Request) {
@@ -677,7 +709,16 @@ function stampGeneration(tl: Timeline, job: Job, nodeIds: string[], gen?: Genera
   };
   for (const id of nodeIds) {
     const node = tl.nodes[id];
-    if (node) node.generation = { ...info, jobType: job.type, at: now(), ...(nodeIds.length > 1 ? { nodesInJob: nodeIds.length } : {}) };
+    if (node) {
+      node.generation = {
+        ...info,
+        jobType: job.type,
+        at: now(),
+        ...(nodeIds.length > 1 ? { nodesInJob: nodeIds.length } : {}),
+        ...(job.temperament ? { temperament: job.temperament } : {}),
+        ...(job.detail ? { detail: job.detail } : {}),
+      };
+    }
   }
 }
 

@@ -249,7 +249,11 @@ export default function App() {
         }}
       />
 
-      <main className="main">
+      <main
+        className="main"
+        // Room the open side panel takes on the right (panel width + its 12px inset - the top bar's own 16px + a gap).
+        style={{ '--panel-space': selected && route.tl ? `${panelWidth + 8}px` : '0px' } as React.CSSProperties}
+      >
         {route.page === 'guide' ? (
           <GuidePage />
         ) : route.page === 'settings' ? (

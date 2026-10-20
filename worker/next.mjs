@@ -45,7 +45,9 @@ async function main() {
     const left = Math.floor((deadline - Date.now()) / 1000);
     if (left <= 0) return console.log('NO_JOB');
     try {
-      const res = await fetch(`${BASE}/api/worker/next?wait=${left}`, {
+      // idOnly: the claim only counts once the writer fetches the brief (--job), so a claim that lands in a
+      // poll whose session is gone returns to the queue after a few minutes.
+      const res = await fetch(`${BASE}/api/worker/next?wait=${left}${idOnly ? '&idOnly=1' : ''}`, {
         signal: AbortSignal.timeout((left + 15) * 1000),
       });
       if (res.status === 204) return console.log('NO_JOB');
