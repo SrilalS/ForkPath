@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node worker/next.mjs:*)",
+      "Bash(node worker/submit.mjs:*)",
+      "Edit(/worker/out/**)"
+    ]
+  }
+}

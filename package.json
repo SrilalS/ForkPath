@@ -1,0 +1,21 @@
+{
+  "name": "althistory",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Branching alternate-history modeler with a Claude Code session acting as the LLM worker",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "worker:next": "node worker/next.mjs",
+    "worker:submit": "node worker/submit.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
+  }
+}

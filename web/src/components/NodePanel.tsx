@@ -1,0 +1,461 @@
+import { useEffect, useMemo, useState } from 'react';
+import type { Timeline, TLNode } from '../../../shared/types.ts';
+import { api, type GenerateOptions } from '../api.ts';
+import { GenerateOptionsFields } from './forms.tsx';
+import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
+import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
+import { childrenOf, descendantIds, mergeTargets, parentIdsOf } from '../graph.ts';
+
+export const PANEL_DEFAULT = 440;
+
+interface Props {
+  timeline: Timeline;
+  node: TLNode;
+  workerOnline: boolean;
+  width: number;
+  /** True while the canvas is in "pick a node to merge with" mode (Escape belongs to that). */
+  mergePicking: boolean;
+  onResize: (width: number) => void;
+  onSelect: (id: string | null) => void;
+  onBranch: (nodeId: string) => void;
+  onStartMerge: (nodeId: string) => void;
+  onError: (msg: string) => void;
+}
+
+type Mode = 'view' | 'edit' | 'continue';
+
+export const PANEL_MIN = 360;
+export const panelMax = () => Math.max(PANEL_MIN, Math.min(window.innerWidth * 0.8, 1200));
+
+export function NodePanel({
+  timeline,
+  node,
+  workerOnline,
+  width,
+  mergePicking,
+  onResize,
+  onSelect,
+  onBranch,
+  onStartMerge,
+  onError,
+}: Props) {
+  const [mode, setMode] = useState<Mode>('view');
+  const [busy, setBusy] = useState(false);
+  const [resizing, setResizing] = useState(false);
+  const isRoot = node.id === timeline.rootId;
+  const parents = parentIdsOf(node)
+    .map((id) => timeline.nodes[id])
+    .filter(Boolean);
+  const children = useMemo(() => childrenOf(timeline, node.id), [timeline, node.id]);
+  const siblings = useMemo(
+    () => (node.parentId ? Object.values(timeline.nodes).filter((n) => n.parentId === node.parentId && n.likelihood !== undefined) : []),
+    [timeline, node.parentId],
+  );
+  const descendants = useMemo(() => descendantIds(timeline, node.id).size, [timeline, node.id]);
+  const canMerge = useMemo(() => mergeTargets(timeline, node.id).size > 0, [timeline, node.id]);
+  const isConvergence = !!node.mergeParents?.length;
+  const primaryChildren = children.filter((c) => c.parentId === node.id).length;
+
+  /** Drag the left edge to resize; double-click it to reset. */
+  function startResize(e: React.PointerEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    setResizing(true);
+    const move = (ev: PointerEvent) => onResize(Math.min(panelMax(), Math.max(PANEL_MIN, startW + (startX - ev.clientX))));
+    const up = () => {
+      setResizing(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
+  useEffect(() => setMode('view'), [node.id]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || mergePicking || (e.target as HTMLElement)?.closest('.modal')) return;
+      if (mode !== 'view') setMode('view');
+      else onSelect(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode, onSelect, mergePicking]);
+
+  async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    setBusy(true);
+    try {
+      return await fn();
+    } catch (err) {
+      onError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const generating = node.status === 'generating';
+  const ready = node.status === 'ready';
+
+  return (
+    <aside className={`panel ${resizing ? 'is-resizing' : ''}`} style={{ width }}>
+      <div
+        className="panel__resize"
+        onPointerDown={startResize}
+        onDoubleClick={() => onResize(PANEL_DEFAULT)}
+        title="Drag to resize, double-click to reset"
+      />
+      <div className="panel__head">
+        <div className="panel__meta">
+          <span className={`tl-chip tl-chip--${node.kind} ${isConvergence ? 'tl-chip--merge' : ''}`}>
+            {isRoot ? 'Point of divergence' : isConvergence ? 'Convergence' : node.kind === 'deviation' ? 'New deviation' : 'Event'}
+          </span>
+          {node.kind === 'event' && node.status === 'ready' && (
+            <span className={`tone-tag ${isMajor(node) ? 'is-major' : ''}`} style={{ '--tone': TONE_STYLE[node.tone].color } as React.CSSProperties}>
+              {TONE_STYLE[node.tone].icon} {SIGNIFICANCE_LABEL[node.significance]} · {TONE_STYLE[node.tone].label}
+            </span>
+          )}
+          {node.period && <span className="muted">{node.period}</span>}
+        </div>
+        <button className="icon-btn" onClick={() => onSelect(null)} aria-label="Close panel">
+          ×
+        </button>
+      </div>
+
+      <div className="panel__scroll">
+        {mode === 'edit' ? (
+          <EditForm
+            node={node}
+            descendants={descendants}
+            busy={busy}
+            onCancel={() => setMode('view')}
+            onSave={async (edit) => {
+              const ok = await run(() => api.editNode(timeline.id, node.id, edit));
+              if (ok) setMode('view');
+            }}
+          />
+        ) : (
+          <>
+            <h2 className="panel__title">
+              {node.title !== 'Generating...' ? node.title : generating ? 'Writing what happens next' : 'Generation failed'}
+            </h2>
+
+            {generating && (
+              <div className="banner banner--info">
+                <span className={`dot ${workerOnline ? 'dot--on' : 'dot--off'} dot--pulse`} />
+                <div>
+                  <strong>{workerOnline ? 'The worker is generating this node.' : 'Queued. The worker is offline.'}</strong>
+                  {!workerOnline && <p>Start the Claude worker session (see README) and it will pick this up.</p>}
+                </div>
+                <button className="btn btn--small btn--ghost" disabled={busy} onClick={() => run(() => api.cancel(timeline.id, node.id))}>
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {node.status === 'error' && (
+              <div className="banner banner--error">
+                <div>
+                  <strong>Generation failed</strong>
+                  <p>{node.error}</p>
+                </div>
+                <div className="banner__actions">
+                  <button className="btn btn--small" disabled={busy} onClick={() => run(() => api.retry(timeline.id, node.id))}>
+                    Retry
+                  </button>
+                  <button className="btn btn--small btn--ghost" disabled={busy} onClick={() => run(() => api.deleteNode(timeline.id, node.id)).then(() => onSelect(node.parentId))}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {ready && node.error && (
+              <div className="banner banner--error">
+                <div>
+                  <strong>Last regeneration failed</strong>
+                  <p>{node.error}</p>
+                </div>
+              </div>
+            )}
+
+            {node.stale && ready && (
+              <div className="banner banner--warn">
+                <div>
+                  <strong>An earlier node changed.</strong>
+                  <p>This node may no longer follow from the history before it.</p>
+                </div>
+                <div className="banner__actions">
+                  {node.kind === 'event' && (
+                    <button className="btn btn--small btn--primary" disabled={busy} onClick={() => run(() => api.regenerate(timeline.id, node.id))}>
+                      Regenerate
+                    </button>
+                  )}
+                  <button className="btn btn--small" disabled={busy} onClick={() => run(() => api.keep(timeline.id, node.id))}>
+                    Keep
+                  </button>
+                  {descendants > 0 && (
+                    <button className="btn btn--small btn--ghost" disabled={busy} onClick={() => run(() => api.keep(timeline.id, node.id, true))}>
+                      Keep whole branch
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {node.likelihood !== undefined && (
+              <div className="branch-info">
+                <div className="branch-info__top">
+                  <span>
+                    One of {siblings.length} possible outcomes
+                  </span>
+                  <strong>{Math.round(node.likelihood * 100)}%</strong>
+                </div>
+                <div className="tl-likelihood__bar tl-likelihood__bar--wide">
+                  <span style={{ width: `${Math.round(node.likelihood * 100)}%` }} />
+                </div>
+                {node.branchReason && <p>{node.branchReason}</p>}
+              </div>
+            )}
+
+            {!generating && node.status !== 'error' && (
+              <>
+                {node.summary && <p className="panel__summary">{node.summary}</p>}
+                {node.keyChanges.length > 0 && (
+                  <section className="panel__section">
+                    <h3>Key changes</h3>
+                    <ul className="changes">
+                      {node.keyChanges.map((c, i) => (
+                        <li key={i}>{c}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+                {node.narrative && (
+                  <section className="panel__section">
+                    <h3>{node.kind === 'deviation' ? 'Detail' : 'Narrative'}</h3>
+                    <div className="narrative">
+                      {node.narrative.split(/\n\s*\n/).map((p, i) => (
+                        <p key={i}>{p}</p>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
+
+            <section className="panel__section panel__nav">
+              {parents.map((p, i) => (
+                <button key={p.id} className="nav-link" onClick={() => onSelect(p.id)}>
+                  <span className="muted">{i === 0 ? '← Follows' : '⤚ Converges with'}</span> {p.title}
+                </button>
+              ))}
+              {children.map((c) => (
+                <button key={c.id} className="nav-link" onClick={() => onSelect(c.id)}>
+                  <span className="muted">{c.parentId === node.id ? '→ Leads to' : '⤙ Merges into'}</span>{' '}
+                  {c.status === 'generating' ? 'Generating...' : c.title}
+                  {c.likelihood !== undefined && <span className="muted"> ({Math.round(c.likelihood * 100)}%)</span>}
+                </button>
+              ))}
+            </section>
+          </>
+        )}
+      </div>
+
+      {mode === 'continue' && (
+        <ContinueForm
+          busy={busy}
+          hasChildren={primaryChildren > 0}
+          onCancel={() => setMode('view')}
+          onSubmit={async (opts) => {
+            const placeholder = await run(() => api.continueFrom(timeline.id, node.id, opts));
+            if (placeholder) onSelect(placeholder.id);
+          }}
+        />
+      )}
+
+      {mode === 'view' && ready && (
+        <div className="panel__actions">
+          <button className="btn btn--primary" disabled={busy} onClick={() => setMode('continue')}>
+            {primaryChildren ? 'Continue another way' : 'Continue'}
+          </button>
+          <button className="btn" disabled={busy} onClick={() => onBranch(node.id)}>
+            Branch here
+          </button>
+          <button
+            className="btn"
+            disabled={busy || !canMerge}
+            onClick={() => onStartMerge(node.id)}
+            title={canMerge ? 'Pick a node on another branch; the model writes where the two storylines meet' : 'No node on a separate branch to merge with'}
+          >
+            Merge with...
+          </button>
+          <button className="btn btn--ghost" disabled={busy} onClick={() => setMode('edit')}>
+            Edit
+          </button>
+          {node.kind === 'event' && (
+            <button className="btn btn--ghost" disabled={busy} onClick={() => run(() => api.regenerate(timeline.id, node.id))} title="Rewrite this node">
+              Regenerate
+            </button>
+          )}
+          <a
+            className="btn btn--ghost"
+            href={api.exportUrl(timeline.id, node.id)}
+            download
+            title="Download the path to this node and everything after it, to import later"
+          >
+            Save branch
+          </a>
+          {!isRoot && (
+            <button
+              className="btn btn--ghost btn--danger"
+              disabled={busy}
+              onClick={() => {
+                const extra = descendants ? ` and the ${descendants} node${descendants > 1 ? 's' : ''} after it` : '';
+                if (confirm(`Delete "${node.title}"${extra}?`)) run(() => api.deleteNode(timeline.id, node.id)).then(() => onSelect(node.parentId));
+              }}
+            >
+              Delete
+            </button>
+          )}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function ContinueForm({
+  busy,
+  hasChildren,
+  onCancel,
+  onSubmit,
+}: {
+  busy: boolean;
+  hasChildren: boolean;
+  onCancel: () => void;
+  onSubmit: (o: GenerateOptions) => void;
+}) {
+  const [opts, setOpts] = useState<GenerateOptions>({ timeSpan: '' });
+  return (
+    <form
+      className="panel__continue form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(opts);
+      }}
+    >
+      <h3>{hasChildren ? 'Continue another way' : 'Continue the timeline'}</h3>
+      {hasChildren && <p className="muted small">The model will see the existing continuations and write a different one.</p>}
+      <GenerateOptionsFields value={opts} onChange={setOpts} />
+      <div className="form__actions">
+        <button type="button" className="btn btn--ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn--primary" disabled={busy}>
+          Generate
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function EditForm({
+  node,
+  descendants,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  node: TLNode;
+  descendants: number;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (edit: Partial<TLNode>) => void;
+}) {
+  const [title, setTitle] = useState(node.title);
+  const [period, setPeriod] = useState(node.period);
+  const [summary, setSummary] = useState(node.summary);
+  const [narrative, setNarrative] = useState(node.narrative);
+  const [changes, setChanges] = useState(node.keyChanges.join('\n'));
+  const [significance, setSignificance] = useState<Significance>(node.significance);
+  const [tone, setTone] = useState<Tone>(node.tone);
+
+  return (
+    <form
+      className="form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave({
+          title: title.trim(),
+          period: period.trim(),
+          summary: summary.trim(),
+          narrative: narrative.trim(),
+          keyChanges: changes.split('\n').map((s) => s.trim()).filter(Boolean),
+          significance,
+          tone,
+        });
+      }}
+    >
+      <h3>Edit node</h3>
+      <div className="field-row">
+        <label className="field">
+          <span className="field__label">Title</span>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} required />
+        </label>
+        <label className="field field--narrow">
+          <span className="field__label">When</span>
+          <input value={period} onChange={(e) => setPeriod(e.target.value)} />
+        </label>
+      </div>
+      {node.kind === 'event' && (
+        <div className="field-row">
+          <label className="field">
+            <span className="field__label">Significance</span>
+            <select value={significance} onChange={(e) => setSignificance(e.target.value as Significance)}>
+              {SIGNIFICANCES.map((s) => (
+                <option key={s} value={s}>
+                  {SIGNIFICANCE_LABEL[s]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field__label">Tone</span>
+            <select value={tone} onChange={(e) => setTone(e.target.value as Tone)}>
+              {TONES.map((t) => (
+                <option key={t} value={t}>
+                  {TONE_STYLE[t].icon} {TONE_STYLE[t].label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+      <label className="field">
+        <span className="field__label">Summary</span>
+        <textarea rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} />
+      </label>
+      <label className="field">
+        <span className="field__label">Key changes <em>one per line</em></span>
+        <textarea rows={4} value={changes} onChange={(e) => setChanges(e.target.value)} />
+      </label>
+      <label className="field">
+        <span className="field__label">{node.kind === 'deviation' ? 'Detail' : 'Narrative'}</span>
+        <textarea rows={10} value={narrative} onChange={(e) => setNarrative(e.target.value)} />
+      </label>
+      {descendants > 0 && (
+        <div className="alert alert--warn">
+          Saving marks the {descendants} node{descendants > 1 ? 's' : ''} after this one as stale. You can regenerate or keep each one.
+        </div>
+      )}
+      <div className="form__actions">
+        <button type="button" className="btn btn--ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn--primary" disabled={busy || !title.trim()}>
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
