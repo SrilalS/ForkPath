@@ -100,6 +100,8 @@ test('auto review: confidence is required, and a doubt unless it is high', () =>
   assert.match(check({}, 'auto'), /add "confidence"/);
   assert.match(check({ confidence: 'medium' }, 'auto'), /add "doubt"/);
   assert.equal(check({ confidence: 'high' }, 'auto'), '');
+  assert.equal(check({ confidence: 'high', doubt: '' }, 'auto'), '', 'the empty doubt copied from the example is fine');
+  assert.match(check({ confidence: 'low', doubt: '' }, 'auto'), /add "doubt"/);
   assert.equal(check({ confidence: 'low', doubt: 'the numbers' }, 'auto'), '');
   const regen = regenerateResult.parse({ node: child({ period: '1950' }) });
   assert.match(regenerateIssues(tl, tl.nodes.main, regen, 'auto').join(), /add "confidence"/);

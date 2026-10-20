@@ -250,7 +250,7 @@ async function attemptJob(
         costUsd: costUsd(u),
         repairs: attempt,
       });
-      const written = out.created ?? (out.updated ? [out.updated] : []);
+      const written = out.created?.length ? out.created : out.updated ? [out.updated] : [];
       usage.written = written.map((w) => w.id);
       const titles = written.map((w) => w.title);
       log(`✅ ${titles.join(' | ')} (${Math.round((Date.now() - started) / 1000)}s; ${fmtUsage(u)})`);

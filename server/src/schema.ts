@@ -56,8 +56,11 @@ const nodeContent = {
    * also needs `doubt`. Low, or medium on a major or pivotal node, gets a plausibility review.
    */
   confidence: z.enum(CONFIDENCES).optional(),
-  /** The weakest claim in the node, in one sentence: what a reviewer should check first. */
-  doubt: z.string().trim().min(1).max(300).optional(),
+  /**
+   * The weakest claim in the node, in one sentence: what a reviewer should check first. Empty counts as
+   * absent: models copy the brief's example ("doubt": "") on high-confidence nodes.
+   */
+  doubt: z.string().trim().max(300).optional(),
 };
 
 // Model results are strict: an unknown or misspelled field ("influenced_by", followUps on a thread start)

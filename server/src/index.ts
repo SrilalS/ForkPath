@@ -906,7 +906,7 @@ app.post(
     const jobId = String(req.params.jobId);
     try {
       const out = submitResult(jobId, req.body) as { created?: { id: string }[]; updated?: { id: string } };
-      recordWorkerSpend(jobId, 'done', out.created?.map((c) => c.id) ?? (out.updated ? [out.updated.id] : []));
+      recordWorkerSpend(jobId, 'done', out.created?.length ? out.created.map((c) => c.id) : out.updated ? [out.updated.id] : []);
       return out;
     } catch (err) {
       // Discarded (cancelled or deleted meanwhile): the tokens were still spent. An invalid result (400) is

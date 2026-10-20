@@ -29,7 +29,7 @@ export function reviewReasonFor(w: ReviewSignals): string | undefined {
   if (w.requestReview) return w.requestReview;
   const big = w.significance === 'major' || w.significance === 'pivotal';
   if (w.confidence !== 'low' && !(w.confidence === 'medium' && big)) return undefined;
-  return `Writer confidence ${w.confidence}${big ? ` on a ${w.significance} event` : ''}: ${w.doubt ?? 'no reason given'}`.slice(0, 300);
+  return `Writer confidence ${w.confidence}${big ? ` on a ${w.significance} event` : ''}: ${w.doubt || 'no reason given'}`.slice(0, 300);
 }
 
 /** In "auto" review mode every written node needs a confidence rating, and a doubt unless it is high. */
