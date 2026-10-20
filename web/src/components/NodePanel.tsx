@@ -4,11 +4,12 @@ import { api, type GenerateOptions } from '../api.ts';
 import { DETAIL_INFO, DetailField, GenerateOptionsFields, TEMPERAMENT_INFO, TemperamentField } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
+import { WorldIndex } from '../../../shared/world.ts';
 import {
   childrenOf,
   descendantIds,
   formatOdds,
-  influenceTargets,
+  hasInfluenceTarget,
   mergeTargets,
   parentIdsOf,
   pathInfo,
@@ -69,20 +70,30 @@ export function NodePanel({
     () => (node.parentId ? Object.values(timeline.nodes).filter((n) => n.parentId === node.parentId && n.likelihood !== undefined) : []),
     [timeline, node.parentId],
   );
-  const descendants = useMemo(() => descendantIds(timeline, node.id).size, [timeline, node.id]);
-  const path = useMemo(() => pathInfo(timeline, node.id), [timeline, node.id]);
-  const canMerge = useMemo(() => mergeTargets(timeline, node.id).size > 0, [timeline, node.id]);
-  const canInfluence = useMemo(() => node.status === 'ready' && influenceTargets(timeline, node.id).size > 0, [timeline, node.id, node.status]);
+  // One index per timeline version, shared by every graph question below (each would otherwise build its own).
+  const ix = useMemo(() => new WorldIndex(timeline), [timeline]);
+  const descendants = useMemo(() => descendantIds(timeline, node.id, ix).size, [timeline, node.id, ix]);
+  const path = useMemo(() => pathInfo(timeline, node.id, ix), [timeline, node.id, ix]);
+  const canMerge = useMemo(() => mergeTargets(timeline, node.id, [], ix).size > 0, [timeline, node.id, ix]);
+  const canInfluence = useMemo(
+    () => node.status === 'ready' && hasInfluenceTarget(timeline, node.id, ix),
+    [timeline, node.id, node.status, ix],
+  );
   const isConvergence = !!node.mergeParents?.length;
   // Thread starts are parallel storylines, not continuations of this one.
   const primaryChildren = children.filter((c) => c.parentId === node.id && !c.threadName).length;
-  const threadRoot = threadRootOf(timeline, node.id);
-  const threadName = streamNameOf(timeline, node.id) ?? threadLabel(timeline, threadRoot);
-  const threadColor = threadColors(timeline).get(threadRoot) ?? (streamNameOf(timeline, node.id) ? '#9aa7c2' : undefined);
-  /** The name this node's stream has before any rename on this node itself (shown as the edit placeholder). */
-  const inheritedStream = node.parentId ? streamLabel(timeline, node.parentId) : 'Main';
-  const incoming = (timeline.links ?? []).filter((l) => l.to === node.id && timeline.nodes[l.from]);
-  const outgoing = (timeline.links ?? []).filter((l) => l.from === node.id && timeline.nodes[l.to]);
+  const { threadName, threadColor, inheritedStream, incoming, outgoing } = useMemo(() => {
+    const root = threadRootOf(timeline, node.id);
+    const renamed = streamNameOf(timeline, node.id);
+    return {
+      threadName: renamed ?? threadLabel(timeline, root),
+      threadColor: threadColors(timeline).get(root) ?? (renamed ? '#9aa7c2' : undefined),
+      /** The name this node's stream has before any rename on this node itself (shown as the edit placeholder). */
+      inheritedStream: node.parentId ? streamLabel(timeline, node.parentId) : 'Main',
+      incoming: (timeline.links ?? []).filter((l) => l.to === node.id && timeline.nodes[l.from]),
+      outgoing: (timeline.links ?? []).filter((l) => l.from === node.id && timeline.nodes[l.to]),
+    };
+  }, [timeline, node.id, node.parentId]);
 
   /** Drag the left edge to resize; double-click it to reset. */
   function startResize(e: React.PointerEvent) {

@@ -111,6 +111,8 @@ export class WorldIndex {
   /** Exclusive alternatives (model-written siblings with a likelihood) per parent. */
   private readonly altCount = new Map<string, number>();
   private readonly choiceMemo = new Map<string, Set<string>>();
+  private readonly upMemo = new Map<string, Set<string>>();
+  private readonly downMemo = new Map<string, Set<string>>();
 
   readonly tl: Timeline;
 
@@ -150,6 +152,22 @@ export class WorldIndex {
       }
     }
     return out;
+  }
+
+  /**
+   * Ancestor and descendant ids of `id`, computed once per index. Checking one source against every node
+   * (the influence and merge pickers) then costs O(n) instead of a graph walk per pair.
+   */
+  private up(id: string): Set<string> {
+    let s = this.upMemo.get(id);
+    if (!s) this.upMemo.set(id, (s = ancestorIds(this.tl, id)));
+    return s;
+  }
+
+  private down(id: string): Set<string> {
+    let s = this.downMemo.get(id);
+    if (!s) this.downMemo.set(id, (s = new Set(this.descendants(id).map((n) => n.id))));
+    return s;
   }
 
   /**
@@ -255,8 +273,8 @@ export class WorldIndex {
     const t = tl.nodes[to];
     if (!f || !t) return { ok: false, reason: 'node not found' };
     if (from === to) return { ok: false, reason: 'a node cannot influence itself' };
-    if (ancestorIds(tl, to).has(from)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
-    if (ancestorIds(tl, from).has(to)) return { ok: false, reason: `"${t.title}" comes before "${f.title}" on the same path` };
+    if (this.down(from).has(to)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
+    if (this.up(from).has(to)) return { ok: false, reason: `"${t.title}" comes before "${f.title}" on the same path` };
     const clash = this.worldClash(from, to);
     if (clash) return clash;
     const fy = startYear(f);
@@ -280,8 +298,8 @@ export class WorldIndex {
     if (!f || !t) return { ok: false, reason: 'node not found' };
     if (from === target) return { ok: false, reason: 'pick a node in another stream' };
     if (t.status !== 'ready') return { ok: false, reason: `"${t.title}" is not ready yet` };
-    const up = ancestorIds(tl, from);
-    if (ancestorIds(tl, target).has(from)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
+    const up = this.up(from);
+    if (this.down(from).has(target)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
     // A new non-thread child of `target` would continue the stream `from` is in: that is just Continue.
     const rival = this.children(target).find((c) => !c.threadName && c.parentId === target && (c.id === from || up.has(c.id)));
     if (rival) {

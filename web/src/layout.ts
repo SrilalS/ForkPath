@@ -76,8 +76,27 @@ function timeKeys(tl: Timeline, all: TLNode[]) {
   return { keys, undated };
 }
 
-export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: FlowNode[]; edges: Edge[]; axis: TimeAxis | null } {
-  const all = Object.values(tl.nodes).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+type Placement = { pos: Map<string, { x: number; y: number }>; axis: TimeAxis | null };
+
+/**
+ * The last layout, keyed by everything positions depend on: ids and parents (plus periods and status in
+ * time mode). An edit to a title, a summary or a stale mark reuses it and skips dagre, which is the
+ * slow part (seconds at a few thousand nodes).
+ */
+let lastPlacement: { key: string; placement: Placement } | null = null;
+
+function placementKey(all: TLNode[], mode: LayoutMode): string {
+  return (
+    mode +
+    all.map((n) => `${n.id}<${n.parentId ?? ''}${n.mergeParents?.length ? `+${n.mergeParents.join('+')}` : ''}${mode === 'time' ? `@${n.period}@${n.status}` : ''}`).join('|')
+  );
+}
+
+/** Where every card goes: dagre's tree, re-columned by date in time mode. */
+function place(tl: Timeline, all: TLNode[], mode: LayoutMode): Placement {
+  const key = placementKey(all, mode);
+  if (lastPlacement?.key === key) return lastPlacement.placement;
+
   const g = new Graph();
   g.setGraph({ rankdir: 'LR', nodesep: NODE_SEP, ranksep: RANK_SEP, marginx: MARGIN, marginy: MARGIN });
   g.setDefaultEdgeLabel(() => ({}));
@@ -88,19 +107,6 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
     for (const p of n.mergeParents ?? []) if (tl.nodes[p]) g.setEdge(p, n.id);
   }
   layout(g);
-
-  const colors = threadColors(tl);
-  const threadOf = (n: TLNode): FlowNodeData['thread'] => {
-    const root = threadRootOf(tl, n.id);
-    const color = colors.get(root);
-    // The tag follows renames (streamName) further along the stream; the color stays the thread's.
-    const name = streamNameOf(tl, n.id);
-    if (color) return { name: name ?? threadLabel(tl, root), color, isStart: root === n.id };
-    return name ? { name, color: RENAMED_MAIN_COLOR, isStart: false } : undefined;
-  };
-
-  const childCount = new Map<string, number>();
-  for (const n of all) if (n.parentId) childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
 
   // Top-left corner of each card. Structure mode uses dagre as is.
   const pos = new Map<string, { x: number; y: number }>();
@@ -121,7 +127,9 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
     for (const n of all) {
       const k = keys.get(n.id)!;
       const c = colOf.get(`${k.year}:${k.sub}`)!;
-      byCol.set(c, [...(byCol.get(c) ?? []), n]);
+      const members = byCol.get(c);
+      if (members) members.push(n);
+      else byCol.set(c, [n]);
     }
     let top = Infinity;
     let bottom = -Infinity;
@@ -149,7 +157,70 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
     };
   }
 
+  const placement = { pos, axis };
+  lastPlacement = { key, placement };
+  return placement;
+}
+
+/**
+ * Each node's thread (its start and color, if a side thread) and current stream name, worked out once top
+ * down in creation order (parents first) instead of walking up from every node.
+ */
+function streams(tl: Timeline, all: TLNode[]): Map<string, FlowNodeData['thread']> {
+  const colors = threadColors(tl);
+  const root = new Map<string, string>();
+  const name = new Map<string, string | undefined>();
+  const out = new Map<string, FlowNodeData['thread']>();
+  for (const n of all) {
+    const parent = n.parentId && tl.nodes[n.parentId] ? n.parentId : null;
+    // A parent created later than its child would be a malformed file: fall back to walking up.
+    const known = !parent || root.has(parent);
+    const r = n.threadName || !parent ? n.id : known ? root.get(parent)! : threadRootOf(tl, n.id);
+    const nm = n.streamName ?? n.threadName ?? (parent ? (known ? name.get(parent) : streamNameOf(tl, parent)) : undefined);
+    root.set(n.id, r);
+    name.set(n.id, nm);
+    const color = colors.get(r);
+    // The tag follows renames (streamName) further along the stream; the color stays the thread's.
+    if (color) out.set(n.id, { name: nm ?? threadLabel(tl, r), color, isStart: r === n.id });
+    else if (nm) out.set(n.id, { name: nm, color: RENAMED_MAIN_COLOR, isStart: false });
+  }
+  return out;
+}
+
+/**
+ * The previous call's flow objects, reused when nothing they show changed. With live.ts keeping unchanged
+ * TLNode objects, an update that touches one node re-renders one card and its edges, not the whole canvas.
+ */
+let lastFlow: { timelineId: string; nodes: Map<string, FlowNode>; edges: Map<string, { sig: string; edge: Edge }> } | null = null;
+
+const sameThread = (a: FlowNodeData['thread'], b: FlowNodeData['thread']) =>
+  a === b || (!!a && !!b && a.name === b.name && a.color === b.color && a.isStart === b.isStart);
+
+export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: FlowNode[]; edges: Edge[]; axis: TimeAxis | null } {
+  const all = Object.values(tl.nodes).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const { pos, axis } = place(tl, all, mode);
+  const threads = streams(tl, all);
+  const colors = threadColors(tl);
+  const prev = lastFlow?.timelineId === tl.id ? lastFlow : null;
+
+  const childCount = new Map<string, number>();
+  for (const n of all) if (n.parentId) childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
+
   const nodes: FlowNode[] = all.map((n) => {
+    const position = pos.get(n.id)!;
+    const data: FlowNodeData = { node: n, isRoot: n.id === tl.rootId, childCount: childCount.get(n.id) ?? 0, thread: threads.get(n.id) };
+    const old = prev?.nodes.get(n.id);
+    if (
+      old &&
+      old.data.node === n &&
+      old.position.x === position.x &&
+      old.position.y === position.y &&
+      old.data.childCount === data.childCount &&
+      old.data.isRoot === data.isRoot &&
+      sameThread(old.data.thread, data.thread)
+    ) {
+      return old;
+    }
     return {
       id: n.id,
       type: 'timeline',
@@ -165,7 +236,7 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
       // lost after the first update and fitView (which only fits measured nodes) silently does nothing.
       measured: { width: NODE_W, height: NODE_H },
       handles: HANDLES,
-      data: { node: n, isRoot: n.id === tl.rootId, childCount: childCount.get(n.id) ?? 0, thread: threadOf(n) },
+      data,
       draggable: false,
     };
   });
@@ -228,5 +299,16 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
     });
   }
 
-  return { nodes, edges, axis };
+  // Edges are small: reuse the old object when its serialized form is unchanged.
+  const edgeCache = new Map<string, { sig: string; edge: Edge }>();
+  const stableEdges = edges.map((e) => {
+    const sig = JSON.stringify(e);
+    const old = prev?.edges.get(e.id);
+    const edge = old && old.sig === sig ? old.edge : e;
+    edgeCache.set(e.id, { sig, edge });
+    return edge;
+  });
+  lastFlow = { timelineId: tl.id, nodes: new Map(nodes.map((n) => [n.id, n])), edges: edgeCache };
+
+  return { nodes, edges: stableEdges, axis };
 }

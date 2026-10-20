@@ -78,6 +78,19 @@ test('most likely history follows each fork favorite', () => {
   assert.deepEqual(ix.forks().map((n) => n.id).sort(), ['a', 'root']);
 });
 
+test('canLink and canInfluence: path rules hold with the cached ancestor and descendant sets', () => {
+  const ix = new WorldIndex(tl);
+  assert.equal(ix.canLink('root', 'a2x').ok, false, 'a2x already follows from root');
+  assert.equal(ix.canLink('a2x', 'a').ok, false, 'a comes before a2x on the same path');
+  assert.equal(ix.canLink('th', 'a2x').ok, true, 'a thread can shape another stream');
+  assert.equal(ix.canLink('b', 'a2x').ok, false, 'different alternatives are different worlds');
+  assert.equal(ix.canInfluence('a2', 'a').ok, false, 'a is earlier in the same stream');
+  assert.equal(ix.canInfluence('root', 'a2x').ok, false, 'a2x already follows from root');
+  assert.equal(ix.canInfluence('th', 'a2x').ok, true);
+  // Asking twice gives the same answer (the sets are memoized per index).
+  assert.equal(ix.canInfluence('th', 'a2x').ok, true);
+});
+
 test('a convergence counts each fork once', () => {
   const t2 = timeline([
     node('r', null),

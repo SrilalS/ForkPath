@@ -3,15 +3,31 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { FlowNode } from '../layout.ts';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 
+/**
+ * What every card reads. Keep this value stable: any change re-renders every card on the canvas, so it
+ * only changes when every card's look changes anyway (pick mode, the Most likely set).
+ */
 export interface CanvasActions {
   quickContinue: (nodeId: string) => void;
-  workerOnline: boolean;
   /** Set while the user is picking a second node (to merge with, or to influence). */
   pick: { kind: 'merge' | 'link'; sourceId: string; targets: Set<string>; selected: Set<string> } | null;
   /** Set while "Most likely" is on: nodes outside the most likely history, drawn faded. */
   unlikely: Set<string> | null;
 }
-export const CanvasActionsContext = createContext<CanvasActions>({ quickContinue: () => {}, workerOnline: false, pick: null, unlikely: null });
+export const CanvasActionsContext = createContext<CanvasActions>({ quickContinue: () => {}, pick: null, unlikely: null });
+
+/** Separate from CanvasActions: only generating cards show it, so a worker going on or offline re-renders just those. */
+export const WorkerOnlineContext = createContext(false);
+
+function WorkerHint() {
+  const workerOnline = useContext(WorkerOnlineContext);
+  return (
+    <div className="tl-node__hint">
+      <span className={`dot ${workerOnline ? 'dot--on' : 'dot--off'}`} />
+      {workerOnline ? 'Worker is on it' : 'Waiting for worker to come online'}
+    </div>
+  );
+}
 
 function kindLabel(isRoot: boolean, node: { kind: string; mergeParents?: string[] }) {
   if (isRoot) return 'Point of divergence';
@@ -21,7 +37,7 @@ function kindLabel(isRoot: boolean, node: { kind: string; mergeParents?: string[
 
 function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
   const { node, isRoot, thread } = data;
-  const { quickContinue, workerOnline, pick, unlikely } = useContext(CanvasActionsContext);
+  const { quickContinue, pick, unlikely } = useContext(CanvasActionsContext);
   const generating = node.status === 'generating';
   const errored = node.status === 'error';
 
@@ -81,10 +97,7 @@ function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
           <div className="tl-node__title">{node.title === 'Generating...' ? 'Writing what happens next' : node.title}</div>
           <div className="shimmer" />
           <div className="shimmer shimmer--short" />
-          <div className="tl-node__hint">
-            <span className={`dot ${workerOnline ? 'dot--on' : 'dot--off'}`} />
-            {workerOnline ? 'Worker is on it' : 'Waiting for worker to come online'}
-          </div>
+          <WorkerHint />
         </div>
       ) : errored ? (
         <div className="tl-node__body">

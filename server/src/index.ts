@@ -754,8 +754,10 @@ app.post(
 
 // ---- live updates ----------------------------------------------------------
 
-app.get('/api/events', (_req, res) => {
-  addClient(res, [
+app.get('/api/events', (req, res) => {
+  // ?timeline=<id>: the page shows that timeline and gets its updates (others' are not sent).
+  const tl = typeof req.query.timeline === 'string' ? req.query.timeline : null;
+  addClient(res, tl, [
     { type: 'timelines', timelines: listTimelines() },
     { type: 'worker', status: workerStatus() },
   ]);

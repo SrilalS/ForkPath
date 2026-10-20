@@ -14,7 +14,7 @@ import type { Timeline, TimelineSummary, WorkerStatus } from '../../shared/types
 import { api } from './api.ts';
 import { useLive } from './live.ts';
 import { NODE_H, NODE_W, toFlow, type FlowNode, type LayoutMode, type TimeAxis } from './layout.ts';
-import { CanvasActionsContext, TimelineNode, type CanvasActions } from './components/TimelineNode.tsx';
+import { CanvasActionsContext, TimelineNode, WorkerOnlineContext, type CanvasActions } from './components/TimelineNode.tsx';
 import { InfluenceEdge } from './components/InfluenceEdge.tsx';
 import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/NodePanel.tsx';
 import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
@@ -468,8 +468,16 @@ function Canvas({
 }) {
   const flow = useReactFlow();
   const { nodes, edges, axis } = useMemo(() => toFlow(timeline, layoutMode), [timeline, layoutMode]);
-  const withSelection = useMemo(() => nodes.map((n) => ({ ...n, selected: n.id === selectedId })), [nodes, selectedId]);
-  const unlikely = useMemo(() => (likelyOnly ? unlikelyIds(timeline) : null), [likelyOnly, timeline]);
+  // Only the selected card gets a new object; the rest keep theirs, so React Flow leaves them alone.
+  const withSelection = useMemo(() => nodes.map((n) => (n.id === selectedId ? { ...n, selected: true } : n)), [nodes, selectedId]);
+  // Kept as the same Set while its contents stay the same, so a timeline update does not re-render every card.
+  const unlikelyRef = useRef<Set<string> | null>(null);
+  const unlikely = useMemo(() => {
+    const next = likelyOnly ? unlikelyIds(timeline) : null;
+    const prev = unlikelyRef.current;
+    if (next && prev && next.size === prev.size && [...next].every((id) => prev.has(id))) return prev;
+    return (unlikelyRef.current = next);
+  }, [likelyOnly, timeline]);
   const shownEdges = useMemo(
     () =>
       unlikely && !pick
@@ -520,53 +528,58 @@ function Canvas({
     if (!visible) centerOn(n, zoom, 500);
   }, [selectedId, nodes, flow, centerOn, panelWidth]);
 
-  const actions = useMemo<CanvasActions>(
-    () => ({
-      workerOnline,
-      pick,
-      // Opens the Continue form for that node; nothing is generated until the user submits it.
-      quickContinue: onRequestContinue,
-      unlikely,
-    }),
-    [workerOnline, pick, onRequestContinue, unlikely],
-  );
+  // The parent passes a new function every render; a stable wrapper keeps the card context from changing.
+  const continueRef = useRef(onRequestContinue);
+  continueRef.current = onRequestContinue;
+  // Opens the Continue form for that node; nothing is generated until the user submits it.
+  const quickContinue = useCallback((id: string) => continueRef.current(id), []);
+  const actions = useMemo<CanvasActions>(() => ({ pick, quickContinue, unlikely }), [pick, quickContinue, unlikely]);
 
   return (
-    <CanvasActionsContext.Provider value={actions}>
-      <ReactFlow<FlowNode>
-        nodes={withSelection}
-        edges={shownEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodeClick={(_, n) => (pick ? onPick(n.id) : onSelect(n.id))}
-        onPaneClick={() => !pick && onSelect(null)}
-        nodesConnectable={false}
-        elementsSelectable
-        minZoom={0.15}
-        maxZoom={1.6}
-        proOptions={{ hideAttribution: true }}
-        colorMode="dark"
-      >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--grid)" />
-        {axis && <TimeAxisOverlay axis={axis} />}
-        <MiniMap
-          pannable
-          zoomable
-          className="minimap"
-          nodeColor={(n) => {
-            const d = (n as FlowNode).data;
-            if (d.node.status === 'generating') return '#5b5f7a';
-            if (d.node.stale) return '#d68a3a';
-            if (d.node.kind === 'deviation') return '#f5b041';
-            return isMajor(d.node) ? TONE_STYLE[d.node.tone].color : '#7d74c9';
-          }}
-          maskColor="rgba(20, 22, 34, 0.65)"
-        />
-        <Controls showInteractive={false} position="bottom-left" />
-      </ReactFlow>
-    </CanvasActionsContext.Provider>
+    <WorkerOnlineContext.Provider value={workerOnline}>
+      <CanvasActionsContext.Provider value={actions}>
+        <ReactFlow<FlowNode>
+          nodes={withSelection}
+          edges={shownEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          // Only cards and edges in view are mounted: a big timeline pans and zooms like a small one.
+          onlyRenderVisibleElements
+          onNodeClick={(_, n) => (pick ? onPick(n.id) : onSelect(n.id))}
+          onPaneClick={() => !pick && onSelect(null)}
+          nodesConnectable={false}
+          elementsSelectable
+          minZoom={0.15}
+          maxZoom={1.6}
+          proOptions={PRO_OPTIONS}
+          colorMode="dark"
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--grid)" />
+          {axis && <TimeAxisOverlay axis={axis} />}
+          <MiniMap
+            pannable
+            zoomable
+            className="minimap"
+            nodeColor={miniMapColor}
+            maskColor="rgba(20, 22, 34, 0.65)"
+          />
+          <Controls showInteractive={false} position="bottom-left" />
+        </ReactFlow>
+      </CanvasActionsContext.Provider>
+    </WorkerOnlineContext.Provider>
   );
 }
+
+/** Module level so the MiniMap does not redraw every rect each time the canvas renders. */
+function miniMapColor(n: FlowNode): string {
+  const d = n.data;
+  if (d.node.status === 'generating') return '#5b5f7a';
+  if (d.node.stale) return '#d68a3a';
+  if (d.node.kind === 'deviation') return '#f5b041';
+  return isMajor(d.node) ? TONE_STYLE[d.node.tone].color : '#7d74c9';
+}
+
+const PRO_OPTIONS = { hideAttribution: true };
 
 /** Year labels and faint column bands, drawn in flow coordinates behind the nodes. */
 function TimeAxisOverlay({ axis }: { axis: TimeAxis }) {

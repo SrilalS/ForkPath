@@ -13,8 +13,7 @@ export function descendantIds(tl: Timeline, id: string, ix = new WorldIndex(tl))
  * separate branch from every one of them (not up or down any of their paths). Selected nodes stay
  * clickable so they can be deselected.
  */
-export function mergeTargets(tl: Timeline, sourceId: string, selected: string[] = []): Set<string> {
-  const ix = new WorldIndex(tl);
+export function mergeTargets(tl: Timeline, sourceId: string, selected: string[] = [], ix = new WorldIndex(tl)): Set<string> {
   const blocked = new Set<string>();
   for (const id of [sourceId, ...selected]) {
     blocked.add(id);
@@ -33,6 +32,11 @@ export function influenceTargets(tl: Timeline, sourceId: string, ix = new WorldI
       .filter((n) => ix.canInfluence(sourceId, n.id).ok)
       .map((n) => n.id),
   );
+}
+
+/** Whether `sourceId` can influence any node at all (stops at the first one; for enabling the button). */
+export function hasInfluenceTarget(tl: Timeline, sourceId: string, ix = new WorldIndex(tl)): boolean {
+  return Object.values(tl.nodes).some((n) => ix.canInfluence(sourceId, n.id).ok);
 }
 
 /** Why `sourceId` cannot influence a new event after `target`, or null when it can. */
