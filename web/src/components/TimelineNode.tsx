@@ -8,8 +8,10 @@ export interface CanvasActions {
   workerOnline: boolean;
   /** Set while the user is picking a second node (to merge with, or to influence). */
   pick: { kind: 'merge' | 'link'; sourceId: string; targets: Set<string>; selected: Set<string> } | null;
+  /** Set while "Most likely" is on: nodes outside the most likely history, drawn faded. */
+  unlikely: Set<string> | null;
 }
-export const CanvasActionsContext = createContext<CanvasActions>({ quickContinue: () => {}, workerOnline: false, pick: null });
+export const CanvasActionsContext = createContext<CanvasActions>({ quickContinue: () => {}, workerOnline: false, pick: null, unlikely: null });
 
 function kindLabel(isRoot: boolean, node: { kind: string; mergeParents?: string[] }) {
   if (isRoot) return 'Point of divergence';
@@ -19,7 +21,7 @@ function kindLabel(isRoot: boolean, node: { kind: string; mergeParents?: string[
 
 function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
   const { node, isRoot, thread } = data;
-  const { quickContinue, workerOnline, pick } = useContext(CanvasActionsContext);
+  const { quickContinue, workerOnline, pick, unlikely } = useContext(CanvasActionsContext);
   const generating = node.status === 'generating';
   const errored = node.status === 'error';
 
@@ -36,6 +38,7 @@ function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
     errored && 'is-error',
     node.stale && 'is-stale',
     thread && 'in-thread',
+    !pick && unlikely?.has(node.id) && 'is-unlikely',
     pick && `pick-${pick.kind}`,
     pick &&
       (pick.sourceId === node.id || pick.selected.has(node.id)
@@ -66,7 +69,11 @@ function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
         ) : (
           <span className={`tl-chip ${node.mergeParents?.length ? 'tl-chip--merge' : ''}`}>{kindLabel(isRoot, node)}</span>
         )}
-        {node.period && !generating && <span className="tl-node__period">{node.period}</span>}
+        {node.period && !generating && (
+          <span className="tl-node__period" title={node.period}>
+            {node.period}
+          </span>
+        )}
       </div>
 
       {generating ? (

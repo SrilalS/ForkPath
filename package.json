@@ -2,7 +2,9 @@
   "name": "althistory",
   "private": true,
   "version": "0.1.0",
-  "description": "Branching alternate-history modeler with a Claude Code session acting as the LLM worker",
+  "description": "Branching alternate-history modeler driven by a Claude Code worker or any model API",
+  "author": "Srilal Siriwardhane",
+  "license": "MIT",
   "workspaces": [
     "server",
     "web"

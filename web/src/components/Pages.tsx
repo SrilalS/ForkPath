@@ -188,6 +188,10 @@ export function GuidePage() {
               When the model returns several outcomes with likelihoods, those are <strong>exclusive alternatives</strong>: if one
               happens, the others do not. Nothing under one alternative can influence anything under another.
             </p>
+            <p>
+              A card&apos;s <strong>path odds</strong> multiply the share of every alternative taken on the way to it (each fork&apos;s
+              numbers are scaled to add up to 100%). They show in the side panel.
+            </p>
           </div>
         </div>
       </Section>
@@ -215,6 +219,8 @@ export function GuidePage() {
               ['⇢ Influence...', 'Side panel', 'Click 1 to 4 cards in other streams, then Influence. Set the strength and guidance; the model writes a new event after each picked card, shaped by this one.'],
               ['🗑️ Delete', 'Side panel', 'Removes the card and everything after it.'],
               ['◷ Align by time', 'Top bar', 'Lines cards up in columns by start year, so events in different branches that happen at the same time sit side by side.'],
+              ['★ Most likely', 'Top bar', 'Fades every card outside the most likely history: at each fork, the outcome the model rated highest. Streams in that world stay lit.'],
+              ['⑂ Turning points', 'Top bar', 'A date-ordered list of every fork (with each outcome\'s share) and every pivotal event. Click one to jump to it.'],
             ] as const
           ).map(([a, w, d]) => (
             <div className="doc__row" key={a}>
@@ -351,7 +357,7 @@ export function AboutPage() {
             [
               ['Interface', 'React, React Flow (the map) and dagre (layout)'],
               ['Server', 'Node.js and Express, with live updates over server-sent events'],
-              ['Model', 'A Claude Code session acting as the worker; no API key needed'],
+              ['Model', 'Your choice in Settings: a Claude Code worker session, or a model API (Anthropic or any OpenAI-compatible server, local ones included)'],
               ['Storage', 'JSON files on this computer, one per timeline'],
               ['File format', `Version ${SCHEMA_VERSION}, with automatic upgrades from older versions`],
             ] as const
@@ -366,8 +372,18 @@ export function AboutPage() {
 
       <Section id="privacy" icon="🔒" title="Your data">
         <p>
-          Timelines stay on this computer. The only thing that reads them is the worker session you start yourself, which sees
-          the brief for each job it handles.
+          Timelines stay on this computer. The only thing that reads them is the engine you choose: the worker session you
+          start yourself, or the model API you set up in Settings. Either one sees only the brief for each job it handles.
+        </p>
+      </Section>
+
+      <Section id="author" icon="👤" title="Made by">
+        <p>
+          AltHistory is designed and built by <strong>Srilal Siriwardhane</strong>.
+        </p>
+        <p>
+          It is open source under the <strong>MIT License</strong>: you can use, change and share it freely, as long as the
+          copyright notice stays with it. It comes with no warranty. The full text is in the <code>LICENSE</code> file.
         </p>
       </Section>
 

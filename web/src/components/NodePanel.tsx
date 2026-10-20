@@ -7,9 +7,11 @@ import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../sha
 import {
   childrenOf,
   descendantIds,
+  formatOdds,
   influenceTargets,
   mergeTargets,
   parentIdsOf,
+  pathInfo,
   streamLabel,
   streamNameOf,
   threadColors,
@@ -68,6 +70,7 @@ export function NodePanel({
     [timeline, node.parentId],
   );
   const descendants = useMemo(() => descendantIds(timeline, node.id).size, [timeline, node.id]);
+  const path = useMemo(() => pathInfo(timeline, node.id), [timeline, node.id]);
   const canMerge = useMemo(() => mergeTargets(timeline, node.id).size > 0, [timeline, node.id]);
   const canInfluence = useMemo(() => node.status === 'ready' && influenceTargets(timeline, node.id).size > 0, [timeline, node.id, node.status]);
   const isConvergence = !!node.mergeParents?.length;
@@ -250,6 +253,19 @@ export function NodePanel({
                   <span style={{ width: `${Math.round(node.likelihood * 100)}%` }} />
                 </div>
                 {node.branchReason && <p>{node.branchReason}</p>}
+              </div>
+            )}
+
+            {path.forks > 0 && (
+              <div
+                className={`path-odds ${path.likely ? 'is-likely' : ''}`}
+                title="The chance history comes this way: each fork's share for the outcome taken, multiplied over every fork on the path"
+              >
+                <span>
+                  Path odds <strong>{formatOdds(path.odds)}</strong>
+                  <span className="muted"> over {path.forks} {path.forks === 1 ? 'fork' : 'forks'}</span>
+                </span>
+                {path.likely && <span className="path-odds__badge">★ Most likely history</span>}
               </div>
             )}
 

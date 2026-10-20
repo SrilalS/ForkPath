@@ -1,22 +1,23 @@
 # AltHistory
 
 A branching alternate-history modeler. You describe a point of divergence, and a language model maps out what
-happens next, node by node. You can edit any node, continue from it, or branch off with a new deviation. The model
-branches on its own when outcomes are genuinely uncertain.
+happens next, event by event, as a living map instead of a single story. It branches where outcomes are genuinely
+uncertain, tracks separate storylines (regions, programs, movements) side by side, and lets them influence and
+merge into each other. You can edit, regenerate, branch or delete any event, and your edits become fact for
+everything after them.
 
-There is no API key. The language model is a **Claude Code session** (the dispatcher) that polls the backend
-for jobs and hands each one to a fresh **`althistory-writer` subagent**, which writes the result back. Each job
-starts with a clean context, so the dispatcher stays small and up to 3 jobs run at once.
+Created by **Srilal Siriwardhane**. Licensed under the [MIT License](LICENSE).
 
 ```
- Browser (React Flow UI)        Backend (Express, :5174)              Dispatcher session    Writer subagent (per job)
- ───────────────────────        ────────────────────────              ──────────────────    ─────────────────────────
- click Continue      ──POST──▶  placeholder node + job queued
-                                GET /api/worker/next (long poll) ◀── next.mjs --id-only
-                                                                     JOB <id> ──spawn──▶  next.mjs --job <id> (brief)
-                                GET .../search                  ◀───────────────────────  search.mjs (optional)
-                                POST .../jobs/<id>/result       ◀───────────────────────  writes out/<id>.json, submit.mjs
- node appears live   ◀──SSE──   validate, apply, broadcast            one-line report ◀──
+ Browser (React Flow UI)          Backend (Express, :5174)                 Engine (one of)
+ ───────────────────────          ────────────────────────                 ───────────────
+ click Continue      ──POST──▶    placeholder node + job queued
+                                  brief: context, nearby events,     ──▶   Claude Code worker session
+                                  realism check, writer rules              (one writer subagent per job)
+                                                                           or
+                                                                           built-in runner calling a model
+                                                                           API (Anthropic, OpenAI-compatible)
+ node appears live   ◀──SSE──     validate, check dates, apply  ◀──────   JSON result
 ```
 
 ## Quick start
@@ -33,28 +34,29 @@ starts with a clean context, so the dispatcher stays small and up to 3 jobs run 
 
    UI: http://localhost:5173 (API on :5174).
 
-2. Start the worker: open a **new Claude Code session in this folder** and send it this prompt:
+2. Pick an engine (see below). The default is the Claude Code worker: open a **new Claude Code session in this
+   folder** and send it this prompt:
 
    > You are the AltHistory worker. Read `worker/WORKER.md` and follow it exactly. Start the job loop now and keep
    > it running until I tell you to stop.
 
    The sidebar shows **Worker online** while it is polling. Jobs created while it is offline wait in the queue.
-   Restart the worker session after updating the app, so it loads the current `WORKER.md` and subagent.
+   Restart the worker session after updating the app, so it loads the current `WORKER.md` and writer rules.
 
-`.claude/settings.json` pre-approves the worker commands (next, submit, search) and writes to `worker/out/`, so the worker session
-does not stop for permission prompts.
+`.claude/settings.json` pre-approves the worker commands (next, submit, search) and writes to `worker/out/`, so
+the worker session does not stop for permission prompts.
 
 ## Engines: Claude Code worker or a model API
 
-Jobs go to exactly one **engine**. The easiest way to set it up is the **Settings** page (sidebar): pick the
-engine, choose a preset (Anthropic, OpenAI, Google Gemini, OpenRouter, Ollama, LM Studio), paste a key, load
-the model list, **Test connection**, and save. Settings are stored in `data/config.json` (gitignored, may hold
-an API key; hand edits apply without a restart). The other engine gets `NO_JOB`.
+Jobs go to exactly one **engine**; the other gets `NO_JOB`. The easiest way to set it up is the **Settings** page
+(sidebar): pick the engine, choose a preset (Anthropic, OpenAI, Google Gemini, OpenRouter, Ollama, LM Studio),
+paste a key, load the model list, **Test connection**, and save. Settings are stored in `data/config.json`
+(gitignored, may hold an API key; hand edits apply without a restart).
 
 | Engine | What runs the model | Set up |
 |---|---|---|
-| `external` (default) | The Claude Code worker session above | Start the worker session |
-| `builtin` | This server calls a model API directly, up to `concurrency` jobs at once | Fill in `builtin` below |
+| `external` (default) | The Claude Code worker session. A dispatcher polls for jobs and hands each to a fresh `althistory-writer` subagent, up to 3 at once | Start the worker session |
+| `builtin` | This server calls a model API directly through plain `fetch` adapters (no SDKs), up to `concurrency` jobs at once | Settings page, or `builtin` below |
 
 ```json
 {
@@ -82,14 +84,20 @@ an API key; hand edits apply without a restart). The other engine gets `NO_JOB`.
 | `pricing` | none | `inputPerMTok`, `outputPerMTok`, `cachedInputPerMTok` in USD per million tokens, from your provider's price page. Without them only tokens are counted |
 | `budget.monthlyUsd` (top level) | none | Monthly spending cap (UTC calendar month). When reached, new jobs wait in the queue; running ones finish |
 
+Both engines use the same briefs, validation, follow-ups and writer rules (`.claude/agents/althistory-writer.md`).
 Every built-in job is logged in `data/usage.json` (tokens, cost, outcome, including failed jobs); Settings shows
-the month's totals and recent jobs. Each generated node records which engine and model wrote it, with tokens,
-cost and time for built-in jobs, shown at the bottom of its side panel.
+the month's totals and recent jobs. Each generated node records which engine and model wrote it (with tokens,
+cost and time for built-in jobs) at the bottom of its side panel.
 
-`GET /api/engine` shows the active config (never the key); `PUT /api/engine` changes it. The built-in runner
-uses the same briefs, validation, follow-ups and writer instructions (`.claude/agents/althistory-writer.md`)
-as the worker, through plain `fetch` adapters in `server/src/llm/` (no SDKs). `npm test` runs their contract
-tests against a fake server.
+## Concepts
+
+| Concept | Meaning |
+|---|---|
+| 🌊 Streams | Your branches, "Continue another way" and parallel threads are separate lines of events in **one shared world** (one per country, say). Streams can influence each other and merge. A stream can be renamed when its focus moves on |
+| 🔀 Alternatives | When the model writes several possible outcomes with likelihoods, only one of them happens. Nothing under one alternative can influence anything under another |
+| 🎲 Path odds | The chance history reaches a node: each fork's share for the outcome taken (scaled so a fork adds up to 100%), multiplied over every fork on the way. Shown in the side panel |
+| 🎨 Significance and tone | Every node is minor, notable, major or pivotal, with a tone (conflict, catastrophe, upheaval, decline, prosperity, discovery, diplomacy, neutral). Selecting a major or pivotal node recolors the UI; the node before one shows an "ahead" warning. Re-rating in **Edit** does not mark later nodes stale |
+| ⚠️ Stale | Editing a node marks everything after it, and everything it influences, as stale until you regenerate or keep it |
 
 ## Using it
 
@@ -98,28 +106,42 @@ tests against a fake server.
 | 🌱 New timeline | Type a "What if" on the start page, or **+ New timeline** |
 | ▶️ Continue | Hover a node and click **+**, or select it and use **Continue** (optional time span and guidance) |
 | 🔀 Another continuation | **Continue another way** on a node that already has children; the model sees the existing ones |
-| 🌿 New deviation | **Branch here**: you describe a change at that point; the original path stays |
-| ✏️ Edit | **Edit** a node. Every node after it gets marked **Stale** |
-| ♻️ Stale nodes | **Regenerate** (model rewrites it to fit), **Keep**, or **Keep whole branch** |
-
-| 🧵 Threads | A **parallel thread** is a separate storyline in the same world (not an alternative). The LLM spawns one when an event sets off a related stream worth tracking on its own; you can start one with **Branch here** then **Parallel thread** |
-| ⇢ Influence | **Influence...** on a node, click 1-4 highlighted nodes in other streams, then **Influence N** in the banner. Pick a strength and optional time span and guidance; the model writes a new event after each picked node, shaped by the first one, and draws a dotted orange arrow to it. Like Merge, separate branches count as streams of one world. The new event cannot start before either node. The LLM also checks every node it writes against nearby events in other streams (within 15 years, `INFLUENCE_WINDOW_YEARS` in `shared/world.ts`), can search older ones (`worker/search.mjs`, old hits show only their key changes), and adds arrows where there is a real effect; it never links model-made alternatives that exclude each other. When an event hits another stream hard, the model can request up to 2 **follow-ups**: INFLUENCE jobs that add an event after that stream's latest one, run by parallel writers. Follow-ups cannot request more. Remove arrows in the side panel. Editing a node marks the nodes it influences stale |
-| ⤚⤙ Merge | **Merge with...** on a node, click 1-4 highlighted nodes on separate branches, then **Merge N** in the banner. The model writes where the two storylines meet (same world, Branch A wins conflicts unless your guidance says otherwise) |
-| ◷ Align by time | Top-bar toggle. Columns are ordered by each node's start date (parsed from its period), so events in different branches line up. Undated nodes sit just after their parent. Remembered per timeline |
-| 📖 Guide, About | Sidebar links (`#/guide`, `#/about`). The Guide explains every concept and action on screen |
-| ⇤ Sidebar | The arrow next to the logo collapses it to an icon rail (new, import, recent timelines, guide, worker status). Remembered |
-| ↔️ Panel width | Drag the side panel's left edge; double-click it to reset. The width is remembered |
-| 💾 Save branch | **Save branch** in the side panel downloads the path to that node plus everything after it. **Export** in the top bar downloads the whole timeline |
+| 🌿 Branch here | Describe a new change at that point, as an **Alternative** (separate branch) or a **Parallel thread** (alongside). The original path stays |
+| ⇢ Influence | **Influence...** on a node, click 1-4 highlighted nodes in other streams, then **Influence N**. Pick a strength and optional guidance; the model writes a new event after each picked node, shaped by this one, with a dotted orange arrow |
+| ⤚⤙ Merge | **Merge with...** on a node, click 1-4 nodes on separate branches, then **Merge N**. The model writes where the storylines meet; Branch A wins conflicts unless your guidance says otherwise |
+| ✏️ Edit | Rewrite any field, including the stream name. Later and influenced nodes get marked **Stale** |
+| ♻️ Regenerate, Keep | **Regenerate** rewrites a node to fit what came before (optional guidance). **Keep** or **Keep whole branch** clears the stale mark |
+| ★ Most likely | Top bar toggle. Fades every node outside the most likely history: at each fork, the outcome the model rated highest |
+| ⑂ Turning points | Top bar. A date-ordered list of every fork (with each outcome's share) and every pivotal event; click one to jump to it |
+| ◷ Align by time | Top bar toggle. Columns follow each node's start date, so events in different branches line up. Remembered per timeline |
+| 💾 Save branch, Export | **Save branch** in the side panel downloads the path to a node plus everything after it. **Export** in the top bar downloads the whole timeline |
 | 📂 Import | **Import** in the sidebar opens a saved file as a new timeline (fresh ids, so importing twice is safe) |
+| 📖 Guide, About, Settings | Sidebar links (`#/guide`, `#/about`, `#/settings`). The Guide explains every concept and action on screen |
+| ⇤ Sidebar, ↔️ panel | The arrow next to the logo collapses the sidebar to an icon rail. Drag the side panel's left edge to resize it (double-click resets). Both are remembered |
 
-Model-made branches show a likelihood on the edge and card, plus the reason for the split in the side panel.
+### 🎛️ Generation options
 
-### 🎨 Mood theme
+Every Continue, Branch, Merge, Influence and Regenerate form has these, stored per request:
 
-Every generated node has a **significance** (minor, notable, major, pivotal) and a **tone** (conflict,
-catastrophe, upheaval, decline, prosperity, discovery, diplomacy, neutral). Selecting a major or pivotal node
-recolors the UI in its tone. Selecting the node just before one gives a faint tint and an "ahead" pill, as a
-warning. You can re-rate both in **Edit** without marking later nodes stale.
+| Option | Choices |
+|---|---|
+| Time span | How far ahead the next event goes, e.g. "6 months" |
+| Guidance | Free text the writer must follow |
+| Temperament | **Realist** (default: incentives, capabilities and base rates decide), **Grim** or **Hopeful** (lean that way only when outcomes are close) |
+| Narrative | **Beats** (default: dated bullet points that keep every fact an essay would, plus a "Why:" line) or **Full story** (prose paragraphs) |
+
+### 🧠 What the writer does on its own
+
+- **Branches** into exclusive alternatives with likelihoods when the outcome is genuinely uncertain, and explains why.
+- **Realism check** before writing: actors' incentives, capabilities and historical base rates, so outcomes are
+  neither optimistic nor pessimistic by default.
+- **Links** its event to events in other streams within 15 years (`INFLUENCE_WINDOW_YEARS` in `shared/world.ts`),
+  and can **search** older ones (old hits show only their key changes). It never links alternatives that
+  exclude each other.
+- **Follow-ups**: when an event hits another stream hard, it can request up to 2 events after that stream's latest
+  one. They run as parallel jobs and cannot request more.
+- **Renames a stream** when its focus has moved on (a "Vietnam War" thread that is now about Iran).
+- Results whose dates run backwards (before the event they continue) are rejected and sent back for fixing.
 
 ## File format versioning
 
@@ -135,28 +157,29 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 
 | Path | What |
 |---|---|
-| `server/src/index.ts` | REST routes, worker API, applying results |
-| `server/src/jobs.ts` | Job queue, long polling, worker presence, claim timeout (20 min) |
-| `server/src/brief.ts` | Turns a job into the markdown brief the worker reads |
-| `server/src/schema.ts` | Zod validation of worker results and user input |
-| `shared/world.ts` | Threads vs alternatives, which nodes share a world, which influence links are valid |
-| `server/src/apply.ts` | Applies worker results (threads, links) and stale propagation |
-| `server/src/migrate.ts` | Schema version upgrades for stored and imported timelines |
-| `server/src/transfer.ts` | Export (timeline or branch) and import |
-| `web/src/mood.ts` | Tone colors and the mood-theme rules |
-| `web/src/` | React UI (React Flow canvas, dagre layout, side panel) |
 | `shared/types.ts` | Types used by both sides |
-| `server/src/runner.ts` | The built-in engine: claims jobs, calls the provider, repairs invalid results |
+| `shared/world.ts` | Streams vs alternatives, which nodes share a world, valid influence links, path odds and the most likely history |
+| `server/src/index.ts` | REST routes, worker API, starting jobs |
+| `server/src/jobs.ts` | Job queue, long polling, engine-aware claims, worker presence, timeouts |
+| `server/src/brief.ts` | Turns a job into the brief the writer reads (context, nearby events, realism check, options) |
+| `server/src/schema.ts` | Zod validation of results and user input |
+| `server/src/apply.ts` | Applies results (alternatives, threads, links, follow-ups, renames), chronology checks, stale propagation |
+| `server/src/search.ts` | Keyword search over older events |
+| `server/src/runner.ts` | The built-in engine: claims jobs, calls the provider, runs tools, repairs invalid results |
 | `server/src/llm/` | Provider adapters on plain `fetch`: `anthropic.ts`, `openai.ts` (OpenAI-compatible) |
 | `server/src/config.ts` | Engine config (`data/config.json`), pricing and budget |
 | `server/src/usage.ts` | Token and cost ledger (`data/usage.json`) |
-| `web/src/components/Settings.tsx` | Settings page: engine, provider, key, test connection, cost, usage |
-| `server/test/` | Contract tests for the adapters (`npm test`) |
-| `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job, fallback |
-| `.claude/agents/althistory-writer.md` | The writer subagent: writing rules, when to branch, links, JSON shapes |
-| `worker/next.mjs`, `worker/submit.mjs` | The worker's job loop commands |
-| `worker/search.mjs`, `server/src/search.ts` | Keyword search the worker uses to find older events that may influence a node |
-| `data/` | Timelines (`timelines/*.json`) and the job queue (`jobs.json`). Delete it to start fresh |
+| `server/src/migrate.ts` | Schema version upgrades for stored and imported timelines |
+| `server/src/transfer.ts` | Export (timeline or branch) and import |
+| `server/test/` | Adapter contract tests and graph rule tests (`npm test`) |
+| `web/src/App.tsx` | Routes, sidebar, canvas, top bar |
+| `web/src/layout.ts`, `web/src/graph.ts` | Graph layout (dagre or time-aligned) and UI helpers over `shared/world.ts` |
+| `web/src/components/` | Side panel, forms, Turning points, Settings, Guide and About pages |
+| `web/src/mood.ts` | Tone colors and the mood-theme rules |
+| `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job |
+| `.claude/agents/althistory-writer.md` | The writer: rules, realism, when to branch, links, follow-ups, JSON shapes (both engines) |
+| `worker/next.mjs`, `worker/submit.mjs`, `worker/search.mjs` | The worker's commands |
+| `data/` | Timelines (`timelines/*.json`), job queue, engine config and usage. Delete it to start fresh |
 
 ## Config
 
@@ -167,3 +190,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `ALTHISTORY_URL` | `http://127.0.0.1:5174` | worker scripts |
 
 Production-style run: `npm run build` then `npm start`, and open http://localhost:5174.
+
+## License
+
+[MIT](LICENSE), copyright (c) 2026 Srilal Siriwardhane.

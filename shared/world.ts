@@ -179,6 +179,50 @@ export class WorldIndex {
     return out;
   }
 
+  /** The exclusive alternatives at `parentId`'s fork, oldest first (empty when it is not a fork). */
+  alternatives(parentId: string): TLNode[] {
+    if ((this.altCount.get(parentId) ?? 0) < 2) return [];
+    return this.children(parentId).filter((c) => c.parentId === parentId && this.isAlternative(c));
+  }
+
+  /**
+   * The share of its fork an alternative gets: its likelihood over the sum of its siblings' likelihoods, so
+   * a fork always adds up to 1 even when the model's numbers do not (or a sibling was deleted).
+   */
+  forkShare(n: TLNode): number {
+    const alts = n.parentId ? this.alternatives(n.parentId) : [];
+    const sum = alts.reduce((s, a) => s + (a.likelihood ?? 0), 0);
+    return sum > 0 ? (n.likelihood ?? 0) / sum : alts.length ? 1 / alts.length : 1;
+  }
+
+  /** The most likely alternative at `parentId`'s fork (the oldest one on a tie), or undefined. */
+  favorite(parentId: string): TLNode | undefined {
+    let best: TLNode | undefined;
+    for (const a of this.alternatives(parentId)) if (!best || (a.likelihood ?? 0) > (best.likelihood ?? 0)) best = a;
+    return best;
+  }
+
+  /**
+   * How likely it is that history reaches `id`: the product of the fork shares of every exclusive alternative
+   * picked on the way (each fork once, also through convergences). 1 when no alternative was picked.
+   */
+  pathOdds(id: string): number {
+    let p = 1;
+    for (const c of this.choices(id)) p *= this.forkShare(this.tl.nodes[c]);
+    return p;
+  }
+
+  /** Whether `id` is in the most likely history: every fork on its way went to that fork's favorite. */
+  inMostLikely(id: string): boolean {
+    for (const c of this.choices(id)) if (this.favorite(this.tl.nodes[c].parentId!)?.id !== c) return false;
+    return true;
+  }
+
+  /** Every fork (a node whose children are exclusive alternatives). */
+  forks(): TLNode[] {
+    return [...this.altCount.entries()].filter(([, n]) => n > 1).map(([id]) => this.tl.nodes[id]).filter(Boolean);
+  }
+
   /** The pair of exclusive alternatives that keeps `a` and `b` apart, if any. */
   private conflict(a: string, b: string): [TLNode, TLNode] | null {
     const ca = this.choices(a);

@@ -41,6 +41,23 @@ export function influenceBlocker(tl: Timeline, sourceId: string, target: string)
   return check.ok ? null : check.reason;
 }
 
+/** Nodes outside the most likely history (see WorldIndex.inMostLikely). */
+export function unlikelyIds(tl: Timeline, ix = new WorldIndex(tl)): Set<string> {
+  return new Set(Object.keys(tl.nodes).filter((id) => !ix.inMostLikely(id)));
+}
+
+/** How likely history reaches `id` (see WorldIndex.pathOdds), over how many forks, and whether it is the most likely history. */
+export function pathInfo(tl: Timeline, id: string, ix = new WorldIndex(tl)) {
+  return { odds: ix.pathOdds(id), forks: ix.choices(id).size, likely: ix.inMostLikely(id) };
+}
+
+/** 0..1 as a percentage that still reads for small odds: "62%", "4.5%", "<0.1%". */
+export function formatOdds(p: number): string {
+  const pct = p * 100;
+  if (pct < 0.1) return '<0.1%';
+  return pct < 10 ? `${pct.toFixed(1).replace(/\.0$/, '')}%` : `${Math.round(pct)}%`;
+}
+
 const THREAD_COLORS = ['#4fd1c5', '#f687b3', '#9ae6b4', '#fbd38d', '#90cdf4', '#d6bcfa'];
 
 /** A stable color per side thread (by creation order); the main thread has none. */

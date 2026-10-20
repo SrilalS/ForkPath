@@ -20,8 +20,9 @@ import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/Node
 import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
 import { AboutPage, GuidePage } from './components/Pages.tsx';
 import { SettingsPage } from './components/Settings.tsx';
+import { TurningPoints } from './components/TurningPoints.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
-import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLabel } from './graph.ts';
+import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLabel, unlikelyIds } from './graph.ts';
 
 const nodeTypes: NodeTypes = { timeline: TimelineNode };
 const edgeTypes: EdgeTypes = { influence: InfluenceEdge };
@@ -111,6 +112,9 @@ export default function App() {
   >(null);
   const [toasts, setToasts] = useState<{ id: number; msg: string }[]>([]);
   const [layoutMode, setLayoutMode] = useLayoutMode(route.tl);
+  /** "Most likely" on: fade everything outside the most likely history. */
+  const [likelyOnly, setLikelyOnly] = useState(false);
+  const [turningOpen, setTurningOpen] = useState(false);
   /** Node waiting for picks on the canvas: nodes to converge with, or nodes whose streams it influences. */
   const [pickSource, setPickSource] = useState<{ kind: 'merge' | 'link'; id: string; selected?: string[] } | null>(null);
   /** Set by a node's + button: open the side panel on that node with the Continue form showing. */
@@ -268,6 +272,7 @@ export default function App() {
               workerOnline={workerOnline}
               panelWidth={selected ? panelWidth : 0}
               layoutMode={layoutMode}
+              likelyOnly={likelyOnly}
               pick={pick}
               onPick={pickTarget}
               onRequestContinue={(id) => {
@@ -282,9 +287,17 @@ export default function App() {
               mood={mood}
               layoutMode={layoutMode}
               onLayoutMode={setLayoutMode}
+              likelyOnly={likelyOnly}
+              onLikelyOnly={setLikelyOnly}
+              turningOpen={turningOpen}
+              onTurningOpen={setTurningOpen}
               onSelect={selectNode}
               onError={toast}
-            />
+            >
+              {turningOpen && (
+                <TurningPoints timeline={timeline} selectedId={route.node} onSelect={selectNode} onClose={() => setTurningOpen(false)} />
+              )}
+            </TopBar>
             {pick && (
               <div className={`merge-banner merge-banner--${pick.kind}`}>
                 {pick.kind === 'merge' ? (
@@ -433,6 +446,7 @@ function Canvas({
   workerOnline,
   panelWidth,
   layoutMode,
+  likelyOnly,
   pick,
   onPick,
   onRequestContinue,
@@ -445,6 +459,7 @@ function Canvas({
   /** Width of the side panel covering the right of the canvas (0 when closed). */
   panelWidth: number;
   layoutMode: LayoutMode;
+  likelyOnly: boolean;
   pick: CanvasActions['pick'];
   onPick: (id: string) => void;
   onRequestContinue: (id: string) => void;
@@ -454,6 +469,16 @@ function Canvas({
   const flow = useReactFlow();
   const { nodes, edges, axis } = useMemo(() => toFlow(timeline, layoutMode), [timeline, layoutMode]);
   const withSelection = useMemo(() => nodes.map((n) => ({ ...n, selected: n.id === selectedId })), [nodes, selectedId]);
+  const unlikely = useMemo(() => (likelyOnly ? unlikelyIds(timeline) : null), [likelyOnly, timeline]);
+  const shownEdges = useMemo(
+    () =>
+      unlikely && !pick
+        ? edges.map((e) =>
+            unlikely.has(e.source) || unlikely.has(e.target) ? { ...e, className: `${e.className ?? ''} is-unlikely` } : e,
+          )
+        : edges,
+    [edges, unlikely, pick],
+  );
   const fittedFor = useRef<string | null>(null);
   const prevSelected = useRef<string | null>(null);
 
@@ -501,15 +526,16 @@ function Canvas({
       pick,
       // Opens the Continue form for that node; nothing is generated until the user submits it.
       quickContinue: onRequestContinue,
+      unlikely,
     }),
-    [workerOnline, pick, onRequestContinue],
+    [workerOnline, pick, onRequestContinue, unlikely],
   );
 
   return (
     <CanvasActionsContext.Provider value={actions}>
       <ReactFlow<FlowNode>
         nodes={withSelection}
-        edges={edges}
+        edges={shownEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={(_, n) => (pick ? onPick(n.id) : onSelect(n.id))}
@@ -569,13 +595,24 @@ function TopBar({
   mood,
   layoutMode,
   onLayoutMode,
+  likelyOnly,
+  onLikelyOnly,
+  turningOpen,
+  onTurningOpen,
   onSelect,
   onError,
+  children,
 }: {
   timeline: Timeline;
   mood: Mood;
+  /** Drawn on its own row under the bar (the Turning points list), so it never covers the buttons when they wrap. */
+  children?: React.ReactNode;
   layoutMode: LayoutMode;
   onLayoutMode: (m: LayoutMode) => void;
+  likelyOnly: boolean;
+  onLikelyOnly: (on: boolean) => void;
+  turningOpen: boolean;
+  onTurningOpen: (open: boolean) => void;
   onSelect: (id: string) => void;
   onError: (m: string) => void;
 }) {
@@ -639,6 +676,22 @@ function TopBar({
         >
           {layoutMode === 'time' ? '◷ Aligned by time' : '◷ Align by time'}
         </button>
+        <button
+          className={`btn btn--small ${likelyOnly ? 'btn--toggled' : 'btn--ghost'}`}
+          aria-pressed={likelyOnly}
+          onClick={() => onLikelyOnly(!likelyOnly)}
+          title="Fade every event outside the most likely history: at each fork, the outcome the model rated highest"
+        >
+          ★ Most likely
+        </button>
+        <button
+          className={`btn btn--small ${turningOpen ? 'btn--toggled' : 'btn--ghost'}`}
+          aria-pressed={turningOpen}
+          onClick={() => onTurningOpen(!turningOpen)}
+          title="Every fork and pivotal event, in date order"
+        >
+          ⑂ Turning points
+        </button>
         <button className="btn btn--small btn--ghost" onClick={() => flow.fitView({ padding: 0.25, maxZoom: 1, duration: 400 })}>
           Fit view
         </button>
@@ -659,6 +712,7 @@ function TopBar({
             : `${SIGNIFICANCE_LABEL[mood.source.significance]} · ${TONE_STYLE[mood.tone].label}`}
         </button>
       )}
+      {children && <div className="topbar__row">{children}</div>}
     </div>
   );
 }
