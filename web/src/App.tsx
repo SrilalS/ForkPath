@@ -18,6 +18,7 @@ import { CanvasActionsContext, TimelineNode, type CanvasActions } from './compon
 import { InfluenceEdge } from './components/InfluenceEdge.tsx';
 import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/NodePanel.tsx';
 import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
+import { AboutPage, GuidePage } from './components/Pages.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
 import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, threadLabel, threadRootOf } from './graph.ts';
 
@@ -55,9 +56,38 @@ function useLayoutMode(timelineId: string | null): [LayoutMode, (m: LayoutMode) 
   return [mode, set];
 }
 
-function readHash() {
+/** Static pages, routed as #/guide and #/about (timeline ids never collide: they are hex). */
+type Page = 'guide' | 'about';
+const PAGES: Page[] = ['guide', 'about'];
+
+function readHash(): { tl: string | null; node: string | null; page: Page | null } {
   const [tl, node] = window.location.hash.replace(/^#\/?/, '').split('/');
-  return { tl: tl || null, node: node || null };
+  if (PAGES.includes(tl as Page)) return { tl: null, node: null, page: tl as Page };
+  return { tl: tl || null, node: node || null, page: null };
+}
+
+const SIDEBAR_KEY = 'althistory.sidebarCollapsed';
+
+/** Sidebar collapsed to an icon rail, remembered in this browser. */
+function useSidebarCollapsed(): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggle = useCallback(() => {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem(SIDEBAR_KEY, c ? '0' : '1');
+      } catch {
+        // storage unavailable: the choice just won't persist
+      }
+      return !c;
+    });
+  }, []);
+  return [collapsed, toggle];
 }
 
 function relTime(iso: string) {
@@ -110,8 +140,14 @@ export default function App() {
   const navigate = useCallback((tl: string | null, node: string | null = null) => {
     const hash = tl ? `#/${tl}${node ? `/${node}` : ''}` : '#/';
     if (window.location.hash !== hash) window.history.pushState(null, '', hash);
-    setRoute({ tl, node });
+    setRoute({ tl, node, page: null });
   }, []);
+  const openPage = useCallback((page: Page) => {
+    const hash = `#/${page}`;
+    if (window.location.hash !== hash) window.history.pushState(null, '', hash);
+    setRoute({ tl: null, node: null, page });
+  }, []);
+  const [sidebarCollapsed, toggleSidebar] = useSidebarCollapsed();
 
   const toast = useCallback((msg: string) => {
     const id = Date.now() + Math.random();
@@ -188,10 +224,14 @@ export default function App() {
   }
 
   return (
-    <div className={`app ${mood.strength > 0 ? 'has-mood' : ''}`} style={moodVars}>
+    <div className={`app ${mood.strength > 0 ? 'has-mood' : ''} ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`} style={moodVars}>
       <Sidebar
         timelines={timelines}
         activeId={route.tl}
+        activePage={route.page}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        onPage={openPage}
         worker={worker}
         connected={connected}
         onOpen={(id) => navigate(id)}
@@ -209,7 +249,11 @@ export default function App() {
       />
 
       <main className="main">
-        {route.tl && timeline ? (
+        {route.page === 'guide' ? (
+          <GuidePage />
+        ) : route.page === 'about' ? (
+          <AboutPage />
+        ) : route.tl && timeline ? (
           <>
             <Canvas
               timeline={timeline}
@@ -612,9 +656,31 @@ function TopBar({
   );
 }
 
+/** Small stroke icons for the sidebar rail. */
+const ICONS = {
+  plus: 'M12 5v14M5 12h14',
+  import: 'M12 15V4M7.5 8.5 12 4l4.5 4.5M5 14v5h14v-5',
+  guide: 'M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5c-.8 0-1.5-.7-1.5-1.5zM20 5.5c0-.8-.7-1.5-1.5-1.5H13v16h5.5c.8 0 1.5-.7 1.5-1.5z',
+  about: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 7.5v.5',
+  collapse: 'M15 6l-6 6 6 6',
+  expand: 'M9 6l6 6-6 6',
+} as const;
+
+function Icon({ name }: { name: keyof typeof ICONS }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={ICONS[name]} />
+    </svg>
+  );
+}
+
 function Sidebar({
   timelines,
   activeId,
+  activePage,
+  collapsed,
+  onToggle,
+  onPage,
   worker,
   connected,
   onOpen,
@@ -624,6 +690,10 @@ function Sidebar({
 }: {
   timelines: TimelineSummary[];
   activeId: string | null;
+  activePage: Page | null;
+  collapsed: boolean;
+  onToggle: () => void;
+  onPage: (p: Page) => void;
   worker: WorkerStatus | null;
   connected: boolean;
   onOpen: (id: string) => void;
@@ -634,38 +704,135 @@ function Sidebar({
   const online = worker?.online ?? false;
   const fileInput = useRef<HTMLInputElement>(null);
   const queued = (worker?.pending ?? 0) + (worker?.claimed ?? 0);
+  const workerTitle = !connected ? 'Backend offline' : online ? 'Worker online' : 'Worker offline';
+  const nav = (
+    <div className="sidebar__nav">
+      {(
+        [
+          ['guide', 'Guide'],
+          ['about', 'About'],
+        ] as const
+      ).map(([p, label]) => (
+        <button key={p} className={`sidebar__link ${activePage === p ? 'is-active' : ''}`} onClick={() => onPage(p)} title={label}>
+          <Icon name={p} />
+          <span className="sidebar__text">{label}</span>
+        </button>
+      ))}
+    </div>
+  );
   return (
-    <nav className="sidebar">
-      <div className="brand" onClick={() => (window.location.hash = '#/')}>
-        <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden>
-          <path d="M9 16 C17 16 16 8 22 8 M9 16 C17 16 16 24 22 24" stroke="var(--accent-soft)" strokeWidth="2" fill="none" />
-          <circle cx="8" cy="16" r="4" fill="var(--amber)" />
-          <circle cx="24" cy="8" r="4" fill="var(--accent)" />
-          <circle cx="24" cy="24" r="4" fill="var(--accent)" />
-        </svg>
-        <span>AltHistory</span>
+    <nav className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
+      <div className="sidebar__top">
+        <div className="brand" onClick={() => (window.location.hash = '#/')} title="AltHistory home">
+          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden>
+            <path d="M9 16 C17 16 16 8 22 8 M9 16 C17 16 16 24 22 24" stroke="var(--accent-soft)" strokeWidth="2" fill="none" />
+            <circle cx="8" cy="16" r="4" fill="var(--amber)" />
+            <circle cx="24" cy="8" r="4" fill="var(--accent)" />
+            <circle cx="24" cy="24" r="4" fill="var(--accent)" />
+          </svg>
+          <span className="sidebar__text">AltHistory</span>
+        </div>
+        <button
+          className="icon-btn sidebar__toggle"
+          onClick={onToggle}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+        >
+          <Icon name={collapsed ? 'expand' : 'collapse'} />
+        </button>
       </div>
 
-      <div className="sidebar__actions">
-        <button className="btn btn--primary" onClick={onNew}>
-          + New timeline
-        </button>
-        <button className="btn" onClick={() => fileInput.current?.click()} title="Open an exported timeline or branch file">
-          Import
-        </button>
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".json,application/json"
-          hidden
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onImport(f);
-            e.target.value = '';
-          }}
+      {collapsed ? (
+        <div className="sidebar__rail">
+          <button className="btn btn--primary sidebar__icon-btn" onClick={onNew} title="New timeline" aria-label="New timeline">
+            <Icon name="plus" />
+          </button>
+          <button className="btn sidebar__icon-btn" onClick={() => fileInput.current?.click()} title="Import a saved file" aria-label="Import">
+            <Icon name="import" />
+          </button>
+          {timelines.slice(0, 8).map((t) => (
+            <button
+              key={t.id}
+              className={`sidebar__initial ${t.id === activeId ? 'is-active' : ''}`}
+              onClick={() => onOpen(t.id)}
+              title={`${t.title} (${t.nodeCount} nodes)`}
+            >
+              {t.title.trim().charAt(0).toUpperCase() || '?'}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="sidebar__actions">
+          <button className="btn btn--primary" onClick={onNew}>
+            + New timeline
+          </button>
+          <button className="btn" onClick={() => fileInput.current?.click()} title="Open an exported timeline or branch file">
+            Import
+          </button>
+        </div>
+      )}
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".json,application/json"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onImport(f);
+          e.target.value = '';
+        }}
+      />
+
+      {collapsed ? (
+        <>
+          <div className="sidebar__spacer" />
+          {nav}
+          <div className={`worker-dot ${online ? 'is-online' : ''}`} title={`${workerTitle}${queued ? ` · ${queued} queued` : ''}`}>
+            <span className={`dot ${online ? 'dot--on dot--pulse' : 'dot--off'}`} />
+            {queued > 0 && <span className="worker-dot__count">{queued}</span>}
+          </div>
+        </>
+      ) : (
+        <SidebarBody
+          timelines={timelines}
+          activeId={activeId}
+          onOpen={onOpen}
+          onDelete={onDelete}
+          nav={nav}
+          online={online}
+          connected={connected}
+          queued={queued}
+          workerTitle={workerTitle}
         />
-      </div>
+      )}
+    </nav>
+  );
+}
 
+function SidebarBody({
+  timelines,
+  activeId,
+  onOpen,
+  onDelete,
+  nav,
+  online,
+  connected,
+  queued,
+  workerTitle,
+}: {
+  timelines: TimelineSummary[];
+  activeId: string | null;
+  onOpen: (id: string) => void;
+  onDelete: (t: TimelineSummary) => void;
+  nav: React.ReactNode;
+  online: boolean;
+  connected: boolean;
+  queued: number;
+  workerTitle: string;
+}) {
+  return (
+    <>
       <div className="sidebar__label">Timelines</div>
       <div className="sidebar__list">
         {timelines.length === 0 && <p className="muted small sidebar__empty">No timelines yet.</p>}
@@ -689,10 +856,12 @@ function Sidebar({
         ))}
       </div>
 
+      {nav}
+
       <div className={`worker-card ${online ? 'is-online' : ''}`}>
         <div className="worker-card__row">
           <span className={`dot ${online ? 'dot--on' : 'dot--off'} ${online ? 'dot--pulse' : ''}`} />
-          <strong>{!connected ? 'Backend offline' : online ? 'Worker online' : 'Worker offline'}</strong>
+          <strong>{workerTitle}</strong>
         </div>
         <div className="muted small">
           {!connected
@@ -704,7 +873,7 @@ function Sidebar({
                 : 'Start the Claude worker session to generate nodes.'}
         </div>
       </div>
-    </nav>
+    </>
   );
 }
 
