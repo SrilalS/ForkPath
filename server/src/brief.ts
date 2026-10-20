@@ -240,7 +240,7 @@ export function jobScope(tl: Timeline, job: Job): { anchor: TLNode; anchorYear: 
   };
 }
 
-/** Target share of each significance (matches the table in .claude/agents/althistory-writer.md). */
+/** Target share of each significance (matches the table in .claude/agents/forkpath-writer.md). */
 const SIGNIFICANCE_TARGET: Record<Significance, number> = { minor: 0.2, notable: 0.55, major: 0.2, pivotal: 0.05 };
 /** Rated events needed before the mix means anything. */
 const CALIBRATION_MIN = 5;

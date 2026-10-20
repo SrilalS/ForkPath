@@ -12,7 +12,7 @@
 //   NO_JOB           nothing arrived in time; run this again
 //   SERVER_DOWN      backend not reachable; check `npm run dev` is running, then run this again
 
-const BASE = process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
+const BASE = process.env.FORKPATH_URL ?? process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
 const args = process.argv.slice(2);
 const opt = (name) => {
   const i = args.indexOf(name);

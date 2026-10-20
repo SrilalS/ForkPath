@@ -15,7 +15,7 @@ import { searchForJob, showNode } from './search.ts';
 import { getTimeline } from './store.ts';
 
 /** The writer instructions shared with the Claude Code subagent; one source for both engines. */
-const WRITER_FILE = path.resolve(import.meta.dirname, '../../.claude/agents/althistory-writer.md');
+const WRITER_FILE = path.resolve(import.meta.dirname, '../../.claude/agents/forkpath-writer.md');
 
 const API_PREAMBLE = `You are called through an API, not as a Claude Code agent. Differences from the instructions below:
 - You have no shell and no files. Ignore every mention of worker/*.mjs commands, worker/out files, the Write tool and OK / INVALID / DISCARD lines.

@@ -36,7 +36,7 @@ export function buildExport(tl: Timeline, branchNodeId?: string): ExportFile {
   }
   const branchNode = branchNodeId ? tl.nodes[branchNodeId] : undefined;
   return {
-    format: 'althistory',
+    format: 'forkpath',
     schemaVersion: SCHEMA_VERSION,
     exportedAt: now(),
     scope: branchNodeId ? 'branch' : 'timeline',
@@ -56,7 +56,7 @@ export function exportFileName(file: ExportFile): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 60);
-  return `${slug || 'timeline'}.${file.scope}.v${file.schemaVersion}.althistory.json`;
+  return `${slug || 'timeline'}.${file.scope}.v${file.schemaVersion}.forkpath.json`;
 }
 
 /**
@@ -67,14 +67,14 @@ export function importFile(raw: unknown): Timeline {
   if (!raw || typeof raw !== 'object') throw new MigrationError('File is not JSON object.');
   const obj = raw as Record<string, any>;
   let source: Record<string, any>;
-  if (obj.format === 'althistory' && obj.timeline) {
+  if ((obj.format === 'forkpath' || obj.format === 'althistory') && obj.timeline) {
     source = structuredClone(obj.timeline);
     // Older exports may only carry the version on the envelope.
     source.schemaVersion ??= obj.schemaVersion;
   } else if (obj.nodes && obj.rootId) {
     source = structuredClone(obj);
   } else {
-    throw new MigrationError('Not an AltHistory export file.');
+    throw new MigrationError('Not a Forkpath export file.');
   }
 
   const { timeline } = migrateTimeline(source);

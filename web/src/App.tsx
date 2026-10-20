@@ -27,12 +27,24 @@ import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLab
 
 const nodeTypes: NodeTypes = { timeline: TimelineNode };
 const edgeTypes: EdgeTypes = { influence: InfluenceEdge };
-const PANEL_WIDTH_KEY = 'althistory.panelWidth';
+// Browser preferences saved before the app was named Forkpath ("althistory.*") move to the new keys once.
+try {
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith('althistory.')) continue;
+    const renamed = `forkpath.${key.slice('althistory.'.length)}`;
+    if (localStorage.getItem(renamed) === null) localStorage.setItem(renamed, localStorage.getItem(key) ?? '');
+    localStorage.removeItem(key);
+  }
+} catch {
+  // storage unavailable: nothing to move
+}
+
+const PANEL_WIDTH_KEY = 'forkpath.panelWidth';
 /** Matches the server: one node plus up to this many others per merge. */
 const MAX_MERGE_WITH = 4;
 /** Matches the server: one event can influence up to this many streams at once. */
 const MAX_INFLUENCE_TARGETS = 4;
-const layoutKey = (timelineId: string) => `althistory.layout.${timelineId}`;
+const layoutKey = (timelineId: string) => `forkpath.layout.${timelineId}`;
 
 /** Layout choice per timeline, remembered in this browser. Defaults to the compact tree. */
 function useLayoutMode(timelineId: string | null): [LayoutMode, (m: LayoutMode) => void] {
@@ -69,7 +81,7 @@ function readHash(): { tl: string | null; node: string | null; page: Page | null
   return { tl: tl || null, node: node || null, page: null };
 }
 
-const SIDEBAR_KEY = 'althistory.sidebarCollapsed';
+const SIDEBAR_KEY = 'forkpath.sidebarCollapsed';
 
 /** Sidebar collapsed to an icon rail, remembered in this browser. */
 function useSidebarCollapsed(): [boolean, () => void] {
@@ -820,14 +832,14 @@ function Sidebar({
   return (
     <nav className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="sidebar__top">
-        <div className="brand" onClick={() => (window.location.hash = '#/')} title="AltHistory home">
+        <div className="brand" onClick={() => (window.location.hash = '#/')} title="Forkpath home">
           <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden>
             <path d="M9 16 C17 16 16 8 22 8 M9 16 C17 16 16 24 22 24" stroke="var(--accent-soft)" strokeWidth="2" fill="none" />
             <circle cx="8" cy="16" r="4" fill="var(--amber)" />
             <circle cx="24" cy="8" r="4" fill="var(--accent)" />
             <circle cx="24" cy="24" r="4" fill="var(--accent)" />
           </svg>
-          <span className="sidebar__text">AltHistory</span>
+          <span className="sidebar__text">Forkpath</span>
         </div>
         <button
           className="icon-btn sidebar__toggle"

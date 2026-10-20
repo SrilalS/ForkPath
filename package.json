@@ -1,5 +1,5 @@
 {
-  "name": "althistory",
+  "name": "forkpath",
   "private": true,
   "version": "0.1.0",
   "description": "Branching alternate-history modeler driven by a Claude Code worker or any model API",

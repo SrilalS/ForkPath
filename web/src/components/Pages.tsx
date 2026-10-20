@@ -86,7 +86,7 @@ export function GuidePage() {
   return (
     <DocPage
       title="Guide"
-      lead="How AltHistory works, what everything on screen means, and what each action does."
+      lead="How Forkpath works, what everything on screen means, and what each action does."
       toc={[
         ['how', 'How it works'],
         ['canvas', 'Reading the map'],
@@ -308,7 +308,7 @@ export function GuidePage() {
         </div>
         <p>To start a worker, open a new Claude Code session in the project folder and send:</p>
         <pre className="doc__code">
-          You are the AltHistory worker. Read `worker/WORKER.md` and follow it exactly. Start the job loop now and keep it running
+          You are the Forkpath worker. Read `worker/WORKER.md` and follow it exactly. Start the job loop now and keep it running
           until I tell you to stop.
         </pre>
         <p className="muted small">After the app is updated, restart the worker session so it re-reads its instructions.</p>
@@ -339,10 +339,10 @@ export function GuidePage() {
 
 export function AboutPage() {
   return (
-    <DocPage title="About" lead="AltHistory is a branching alternate-history modeler: one change to history, and a map of where it leads.">
+    <DocPage title="About" lead="Forkpath is a branching alternate-history modeler: one change to history, and a map of where it leads.">
       <Section id="what" icon="🌍" title="What it is">
         <p>
-          AltHistory lets you explore &quot;what if&quot; questions as a living map instead of a single story. A language model
+          Forkpath lets you explore &quot;what if&quot; questions as a living map instead of a single story. A language model
           writes the consequences of your change event by event, branches where outcomes are genuinely uncertain, and keeps
           separate storylines (regions, programs, movements) apart until you merge them or let them influence each other.
         </p>
@@ -380,7 +380,7 @@ export function AboutPage() {
 
       <Section id="author" icon="👤" title="Made by">
         <p>
-          AltHistory is designed and built by <strong>Srilal Siriwardhane</strong>.
+          Forkpath is designed and built by <strong>Srilal Siriwardhane</strong>.
         </p>
         <p>
           It is open source under the <strong>MIT License</strong>: you can use, change and share it freely, as long as the

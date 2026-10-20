@@ -182,7 +182,8 @@ export interface Timeline {
 
 /** A file produced by Export: a whole timeline, or one branch of it (root to a node, plus everything after it). */
 export interface ExportFile {
-  format: 'althistory';
+  /** 'althistory' on files exported before the app was named Forkpath; both import. */
+  format: 'forkpath' | 'althistory';
   schemaVersion: number;
   exportedAt: string;
   /** 'timeline' = every node; 'branch' = the path to branchNodeId plus its descendants. */

@@ -41,7 +41,7 @@ export function versionOf(tl: Raw): number {
 /** Returns the timeline at the current version and whether anything changed. Mutates `raw`. */
 export function migrateTimeline(raw: Raw): { timeline: Timeline; migrated: boolean; from: number } {
   if (!raw || typeof raw !== 'object' || typeof raw.nodes !== 'object' || !raw.rootId || !raw.nodes[raw.rootId]) {
-    throw new MigrationError('Not an AltHistory timeline (missing nodes or root).');
+    throw new MigrationError('Not a Forkpath timeline (missing nodes or root).');
   }
   const from = versionOf(raw);
   if (from > SCHEMA_VERSION) {

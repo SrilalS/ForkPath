@@ -61,12 +61,13 @@ import {
 } from './schema.ts';
 
 // Not PORT: dev tooling often sets PORT for the web server, which would collide with Vite.
-const PORT = Number(process.env.ALTHISTORY_API_PORT ?? 5174);
+// The ALTHISTORY_* names are read too, from before the app was named Forkpath.
+const PORT = Number(process.env.FORKPATH_API_PORT ?? process.env.ALTHISTORY_API_PORT ?? 5174);
 /**
  * Loopback only by default: the API can store a model API key and spend money, and has no login. Set
- * ALTHISTORY_HOST=0.0.0.0 only on a trusted network.
+ * FORKPATH_HOST=0.0.0.0 only on a trusted network.
  */
-const HOST = process.env.ALTHISTORY_HOST ?? '127.0.0.1';
+const HOST = process.env.FORKPATH_HOST ?? process.env.ALTHISTORY_HOST ?? '127.0.0.1';
 const MAX_WAIT_S = 590;
 
 const app = express();
@@ -916,5 +917,5 @@ startRunner({
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`[althistory] API on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`);
+  console.log(`[forkpath] API on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`);
 });

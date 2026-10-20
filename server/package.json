@@ -1,5 +1,5 @@
 {
-  "name": "@althistory/server",
+  "name": "@forkpath/server",
   "private": true,
   "version": "0.1.0",
   "type": "module",

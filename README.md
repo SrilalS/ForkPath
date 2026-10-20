@@ -1,4 +1,4 @@
-# AltHistory
+# Forkpath
 
 A branching alternate-history modeler. You describe a point of divergence, and a language model maps out what
 happens next, event by event, as a living map instead of a single story. It branches where outcomes are genuinely
@@ -37,7 +37,7 @@ Created by **Srilal Siriwardhane**. Licensed under the [MIT License](LICENSE).
 2. Pick an engine (see below). The default is the Claude Code worker: open a **new Claude Code session in this
    folder** and send it this prompt:
 
-   > You are the AltHistory worker. Read `worker/WORKER.md` and follow it exactly. Start the job loop now and keep
+   > You are the Forkpath worker. Read `worker/WORKER.md` and follow it exactly. Start the job loop now and keep
    > it running until I tell you to stop.
 
    The sidebar shows **Worker online** while it is polling. Jobs created while it is offline wait in the queue.
@@ -55,7 +55,7 @@ paste a key, load the model list, **Test connection**, and save. Settings are st
 
 | Engine | What runs the model | Set up |
 |---|---|---|
-| `external` (default) | The Claude Code worker session. A dispatcher polls for jobs and hands each to a fresh `althistory-writer` subagent, up to 3 at once | Start the worker session |
+| `external` (default) | The Claude Code worker session. A dispatcher polls for jobs and hands each to a fresh `forkpath-writer` subagent, up to 3 at once | Start the worker session |
 | `builtin` | This server calls a model API directly through plain `fetch` adapters (no SDKs), up to `concurrency` jobs at once | Settings page, or `builtin` below |
 
 ```json
@@ -84,7 +84,7 @@ paste a key, load the model list, **Test connection**, and save. Settings are st
 | `pricing` | none | `inputPerMTok`, `outputPerMTok`, `cachedInputPerMTok` in USD per million tokens, from your provider's price page. Without them only tokens are counted |
 | `budget.monthlyUsd` (top level) | none | Monthly spending cap (UTC calendar month). When reached, new jobs wait in the queue; running ones finish |
 
-Both engines use the same briefs, validation, follow-ups and writer rules (`.claude/agents/althistory-writer.md`).
+Both engines use the same briefs, validation, follow-ups and writer rules (`.claude/agents/forkpath-writer.md`).
 Every built-in job is logged in `data/usage.jsonl` (tokens, cost, outcome, including failed jobs); Settings shows
 the month's totals and recent jobs. Each generated node records which engine and model wrote it (with tokens,
 cost and time for built-in jobs) at the bottom of its side panel.
@@ -186,7 +186,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `web/src/components/` | Side panel, forms, Turning points, Settings, Guide and About pages |
 | `web/src/mood.ts` | Tone colors and the mood-theme rules |
 | `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job |
-| `.claude/agents/althistory-writer.md` | The writer: rules, realism, when to branch, links, follow-ups, JSON shapes (both engines) |
+| `.claude/agents/forkpath-writer.md` | The writer: rules, realism, when to branch, links, follow-ups, JSON shapes (both engines) |
 | `worker/next.mjs`, `worker/submit.mjs`, `worker/search.mjs` | The worker's commands |
 | `data/` | Timelines (`timelines/*.json`), job queue, engine config and usage. Delete it to start fresh |
 
@@ -194,9 +194,11 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 
 | Env var | Default | Used by |
 |---|---|---|
-| `ALTHISTORY_API_PORT` | `5174` | backend (also update `web/vite.config.ts` proxy if changed) |
-| `ALTHISTORY_HOST` | `127.0.0.1` | backend bind address. Loopback only by default, because the API can hold an API key and spend money. Use `0.0.0.0` only on a trusted network |
-| `ALTHISTORY_URL` | `http://127.0.0.1:5174` | worker scripts |
+| `FORKPATH_API_PORT` | `5174` | backend (also update `web/vite.config.ts` proxy if changed) |
+| `FORKPATH_HOST` | `127.0.0.1` | backend bind address. Loopback only by default, because the API can hold an API key and spend money. Use `0.0.0.0` only on a trusted network |
+| `FORKPATH_URL` | `http://127.0.0.1:5174` | worker scripts |
+
+The names from before the rename (`ALTHISTORY_*`) still work.
 
 Production-style run: `npm run build` then `npm start`, and open http://localhost:5174.
 

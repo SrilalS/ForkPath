@@ -10,7 +10,7 @@
 // Results only include events this job's node may link to. Events older than the influence window show
 // only their key changes. Output starts with RESULTS, NO_RESULTS, NODE, NOT_FOUND or ERROR.
 
-const BASE = process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
+const BASE = process.env.FORKPATH_URL ?? process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
 const [jobId, ...rest] = process.argv.slice(2);
 const opt = (name) => {
   const i = rest.indexOf(name);

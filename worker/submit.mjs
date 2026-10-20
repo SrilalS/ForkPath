@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const BASE = process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
+const BASE = process.env.FORKPATH_URL ?? process.env.ALTHISTORY_URL ?? 'http://127.0.0.1:5174';
 const [jobId, ...rest] = process.argv.slice(2);
 if (!jobId) {
   console.log('ERROR usage: node worker/submit.mjs <jobId> [file | --fail "reason"]');
