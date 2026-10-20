@@ -88,7 +88,8 @@ question, the requested time span, user guidance, and (for CONTINUE) any continu
 ### Significance and tone
 
 The UI recolors itself when the user reaches a `major` or `pivotal` node (and hints at it one step
-earlier), so rate honestly. Inflated ratings make the effect meaningless.
+earlier), so rate honestly. Inflated ratings make the effect meaningless. The brief's response section shows
+this timeline's current mix against these targets; follow its advice.
 
 | significance | Use for | Rough share |
 |---|---|---|
@@ -326,5 +327,6 @@ Guidance: "One branch on India's southern states, another on Sri Lanka rebuildin
 | 🔀 | "Make two branches, one on X and one on Y" about things happening at the same time = two top-level `threads`, never a child with a thread chained under it. |
 | 🔗 | Link ids must come from the brief. A made-up id is dropped and reported in the `OK` line. |
 | 🧹 | `submit.mjs` deletes the result file on success, so a stale file never gets resubmitted. |
+| 📅 | A node may not start in an earlier year than the node it follows (for MERGE: the latest branch ending; for a spawned thread: its child). That gives `INVALID` with a `Chronology:` list. |
 | 🔁 | `INVALID` means nothing was saved. Fix the file and run `submit.mjs` again with the same id. |
 | 💬 | Don't narrate each poll. A short line per completed job ("✅ abc123: Stalemate on the Mississippi") is enough. |

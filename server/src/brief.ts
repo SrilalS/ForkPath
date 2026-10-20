@@ -1,5 +1,5 @@
-import type { Job, Timeline, TLNode } from '../../shared/types.ts';
-import { ancestorIds, sameWorld, threadLabel, threadRootOf } from '../../shared/world.ts';
+import { SIGNIFICANCES, type Job, type Significance, type Timeline, type TLNode } from '../../shared/types.ts';
+import { ancestorIds, threadLabel, threadRootOf, WorldIndex } from '../../shared/world.ts';
 import { parsePeriodStart } from '../../shared/time.ts';
 import { childrenOf, pathTo } from './store.ts';
 
@@ -87,6 +87,7 @@ function threadContext(tl: Timeline, chain: TLNode[], anchor: TLNode, exclude: S
   const ownThread = threadRootOf(tl, anchor.id);
   const anchorDate = parsePeriodStart(anchor.period);
   const upstream = ancestorIds(tl, anchor.id);
+  const ix = new WorldIndex(tl);
   const latest = new Map<string, { node: TLNode; date: number }>();
   for (const n of Object.values(tl.nodes)) {
     if (n.status !== 'ready' || exclude.has(n.id) || inChain.has(n.id) || upstream.has(n.id)) continue;
@@ -94,7 +95,7 @@ function threadContext(tl: Timeline, chain: TLNode[], anchor: TLNode, exclude: S
     if (thread === ownThread) continue;
     const date = parsePeriodStart(n.period) ?? -Infinity;
     if (anchorDate !== null && date > anchorDate + 1) continue; // not yet happened at this point
-    if (!sameWorld(tl, n.id, anchor.id)) continue;
+    if (!ix.sameWorld(n.id, anchor.id)) continue;
     const cur = latest.get(thread);
     if (!cur || date > cur.date || (date === cur.date && n.createdAt > cur.node.createdAt)) latest.set(thread, { node: n, date });
   }
@@ -113,7 +114,33 @@ function threadContext(tl: Timeline, chain: TLNode[], anchor: TLNode, exclude: S
   return out;
 }
 
-function responseSection(job: Job, shape: 'children' | 'node'): string[] {
+/** Target share of each significance (matches the table in WORKER.md). */
+const SIGNIFICANCE_TARGET: Record<Significance, number> = { minor: 0.2, notable: 0.55, major: 0.2, pivotal: 0.05 };
+/** Rated events needed before the mix means anything. */
+const CALIBRATION_MIN = 5;
+
+/**
+ * How this timeline's significance ratings compare with the targets, so ratings stay calibrated across jobs
+ * (the mood theme only means something when major and pivotal are rare). Empty for young timelines.
+ */
+export function calibrationLines(tl: Timeline, exclude: string): string[] {
+  const rated = Object.values(tl.nodes).filter((n) => n.kind === 'event' && n.status === 'ready' && n.id !== exclude);
+  if (rated.length < CALIBRATION_MIN) return [];
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  const share = (s: Significance) => rated.filter((n) => n.significance === s).length / rated.length;
+  const mix = SIGNIFICANCES.map((s) => `${s} ${pct(share(s))} (target ${s === 'pivotal' ? '<=' : '~'}${pct(SIGNIFICANCE_TARGET[s])})`);
+  const high = share('major') + share('pivotal');
+  const highTarget = SIGNIFICANCE_TARGET.major + SIGNIFICANCE_TARGET.pivotal;
+  const advice =
+    high > highTarget + 0.1
+      ? 'Major and pivotal are over-used here. Rate this major only if it reshapes a whole region or field; otherwise notable or minor.'
+      : high < highTarget - 0.15
+        ? 'Major and pivotal are rare here. Do not hold back when this development genuinely reshapes a region or era.'
+        : 'The mix is on target; keep rating each node on its own merits.';
+  return [`Significance so far in this timeline (${rated.length} events): ${mix.join(', ')}.`, advice];
+}
+
+function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): string[] {
   const outFile = `worker/out/${job.id}.json`;
   const linkHint =
     'Optional on any node you write: "influences" / "influencedBy": [ { "node": "<existing id or @key>", "strength": "mild", "note": "" } ]. ' +
@@ -131,6 +158,7 @@ function responseSection(job: Job, shape: 'children' | 'node'): string[] {
     example,
     '```',
     FIELD_HINT,
+    ...calibrationLines(tl, shape === 'node' ? job.targetNodeId : (job.placeholderId ?? '')),
     linkHint,
   ];
   if (shape === 'node') return [...lines, 'Regenerate never branches: return exactly one node.'];
@@ -179,7 +207,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
       '',
       `You are writing in thread "${threadLabel(tl, threadRootOf(tl, target.id))}".`,
       ...threadContext(tl, chain, target, new Set([job.placeholderId ?? ''])),
-      ...responseSection(job, 'children'),
+      ...responseSection(job, tl, 'children'),
     );
   } else if (job.type === 'merge') {
     const chain = pathTo(tl, job.targetNodeId);
@@ -203,7 +231,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
         tl.nodes[job.targetNodeId],
         new Set([job.placeholderId ?? '', ...others.flatMap((id) => pathTo(tl, id).map((n) => n.id))]),
       ),
-      ...responseSection(job, 'children'),
+      ...responseSection(job, tl, 'children'),
     );
   } else {
     const target = tl.nodes[job.targetNodeId];
@@ -230,7 +258,7 @@ export function buildBrief(job: Job, tl: Timeline): string {
       '## Outdated version of this node (for reference only)',
       describeNode(tl, target, chain.length, true),
       ...threadContext(tl, [...chain, target], target, new Set([target.id])),
-      ...responseSection(job, 'node'),
+      ...responseSection(job, tl, 'node'),
     );
   }
   return parts.join('\n');

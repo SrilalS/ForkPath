@@ -1,20 +1,11 @@
 import type { Timeline } from '../../shared/types.ts';
-import { ancestorIds, canLink, childrenOf, parentIds, threadLabel, threadRootOf } from '../../shared/world.ts';
+import { ancestorIds, canLink, childrenOf, parentIds, threadLabel, threadRootOf, WorldIndex } from '../../shared/world.ts';
 
 export { ancestorIds, canLink, childrenOf, threadLabel, threadRootOf };
 export const parentIdsOf = parentIds;
 
-export function descendantIds(tl: Timeline, id: string): Set<string> {
-  const seen = new Set<string>();
-  const stack = [id];
-  while (stack.length) {
-    for (const c of childrenOf(tl, stack.pop()!)) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      stack.push(c.id);
-    }
-  }
-  return seen;
+export function descendantIds(tl: Timeline, id: string, ix = new WorldIndex(tl)): Set<string> {
+  return new Set(ix.descendants(id).map((n) => n.id));
 }
 
 /**
@@ -23,11 +14,12 @@ export function descendantIds(tl: Timeline, id: string): Set<string> {
  * clickable so they can be deselected.
  */
 export function mergeTargets(tl: Timeline, sourceId: string, selected: string[] = []): Set<string> {
+  const ix = new WorldIndex(tl);
   const blocked = new Set<string>();
   for (const id of [sourceId, ...selected]) {
     blocked.add(id);
     for (const a of ancestorIds(tl, id)) blocked.add(a);
-    for (const d of descendantIds(tl, id)) blocked.add(d);
+    for (const d of ix.descendants(id)) blocked.add(d.id);
   }
   const out = new Set(Object.values(tl.nodes).filter((n) => n.status === 'ready' && !blocked.has(n.id)).map((n) => n.id));
   for (const id of selected) out.add(id);
@@ -36,9 +28,10 @@ export function mergeTargets(tl: Timeline, sourceId: string, selected: string[] 
 
 /** Nodes that `sourceId` may influence under the world rules. */
 export function linkTargets(tl: Timeline, sourceId: string): Set<string> {
+  const ix = new WorldIndex(tl);
   return new Set(
     Object.values(tl.nodes)
-      .filter((n) => n.status === 'ready' && canLink(tl, sourceId, n.id).ok)
+      .filter((n) => n.status === 'ready' && ix.canLink(sourceId, n.id).ok)
       .map((n) => n.id),
   );
 }

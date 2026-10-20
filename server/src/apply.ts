@@ -1,7 +1,8 @@
 // Applies worker results and link edits to a timeline. Pure functions over the Timeline object (no I/O),
 // so they can be tested without the HTTP layer.
 import type { InfluenceLink, Job, Strength, Timeline, TLNode } from '../../shared/types.ts';
-import { canLink } from '../../shared/world.ts';
+import { canLink, WorldIndex } from '../../shared/world.ts';
+import { parsePeriodStart } from '../../shared/time.ts';
 import { descendantsOf, makeNode, newId, now } from './store.ts';
 import type { continueResult, LinkRef, regenerateResult, threadStart } from './schema.ts';
 import type { z } from 'zod';
@@ -25,8 +26,9 @@ export function addLink(
   strength: Strength,
   note: string,
   source: InfluenceLink['source'],
+  ix?: WorldIndex,
 ): { link: InfluenceLink } | { error: string } {
-  const check = canLink(tl, from, to);
+  const check = canLink(tl, from, to, ix);
   if (!check.ok) return { error: check.reason };
   const existing = tl.links.find((l) => l.from === from && l.to === to);
   if (existing) {
@@ -44,6 +46,7 @@ function applyLinkRefs(
   refs: { influences?: LinkRef[]; influencedBy?: LinkRef[] },
   report: ApplyReport,
   keys: Map<string, string> = new Map(),
+  ix = new WorldIndex(tl),
 ) {
   const one = (other: string, ref: LinkRef, dir: 'out' | 'in') => {
     // "@key" points at another node written in the same result.
@@ -53,7 +56,7 @@ function applyLinkRefs(
       return;
     }
     const [from, to] = dir === 'out' ? [other, id] : [id, other];
-    const r = addLink(tl, from, to, ref.strength, ref.note, 'llm');
+    const r = addLink(tl, from, to, ref.strength, ref.note, 'llm', ix);
     if ('error' in r) report.dropped.push(`${tl.nodes[from].title} -> ${tl.nodes[to].title}: ${r.error}`);
     else report.links++;
   };
@@ -133,7 +136,9 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
   }
 
   // Links last, so every new node exists and the world rules see the final graph.
-  for (const [id, refs] of pendingLinks) applyLinkRefs(tl, id, refs, report, keys);
+  // Links never change parentage, so one index covers them all.
+  const ix = new WorldIndex(tl);
+  for (const [id, refs] of pendingLinks) applyLinkRefs(tl, id, refs, report, keys, ix);
   return report;
 }
 
@@ -147,17 +152,64 @@ export function applyRegenerate(tl: Timeline, node: TLNode, result: RegenerateRe
   return report;
 }
 
+/** Whole start year of a period, or null when it cannot be read (undated nodes are never flagged). */
+const startYear = (period: string) => {
+  const y = parsePeriodStart(period);
+  return y === null ? null : Math.floor(y);
+};
+
+/**
+ * Nodes in a worker result that start in an earlier year than a node they follow (the target, every merged
+ * branch, or the child a thread is spawned from). Each entry is a message for the worker.
+ */
+export function chronologyIssues(
+  tl: Timeline,
+  written: { title: string; period: string }[],
+  parents: string[],
+): string[] {
+  const dated = parents
+    .map((id) => tl.nodes[id])
+    .filter((p): p is TLNode => !!p)
+    .map((p) => ({ p, year: startYear(p.period) }))
+    .filter((x): x is { p: TLNode; year: number } => x.year !== null);
+  if (!dated.length) return [];
+  const latest = dated.reduce((a, b) => (b.year > a.year ? b : a));
+  return written.flatMap((w) => {
+    const y = startYear(w.period);
+    return y !== null && y < latest.year
+      ? [`"${w.title}" (${w.period}) starts before "${latest.p.title}" (${latest.p.period}), which it follows. Start it in ${latest.year} or later.`]
+      : [];
+  });
+}
+
+/** Chronology check for a CONTINUE or MERGE result, including spawned threads (which follow their child). */
+export function continueChronology(tl: Timeline, job: Job, result: ContinueResult): string[] {
+  const parents = [job.targetNodeId, ...(job.type === 'merge' ? (job.mergeWith ?? []) : [])];
+  const issues = chronologyIssues(tl, [...result.children, ...result.threads], parents);
+  for (const c of result.children) {
+    const y = startYear(c.period);
+    for (const t of c.spawnThreads ?? []) {
+      const ty = startYear(t.period);
+      if (y !== null && ty !== null && ty < y) {
+        issues.push(`Thread "${t.thread}": "${t.title}" (${t.period}) starts before "${c.title}" (${c.period}), which sets it off.`);
+      }
+    }
+  }
+  return issues;
+}
+
 /**
  * After `nodeId` changes, everything that followed from it may be out of date: its descendants, and the
  * nodes it influences (plus their descendants).
  */
 export function markStaleFrom(tl: Timeline, nodeId: string) {
   const targets = new Set<string>();
-  for (const d of descendantsOf(tl, nodeId)) targets.add(d.id);
+  const ix = new WorldIndex(tl);
+  for (const d of descendantsOf(tl, nodeId, ix)) targets.add(d.id);
   for (const l of tl.links) {
     if (l.from !== nodeId || !tl.nodes[l.to]) continue;
     targets.add(l.to);
-    for (const d of descendantsOf(tl, l.to)) targets.add(d.id);
+    for (const d of descendantsOf(tl, l.to, ix)) targets.add(d.id);
   }
   for (const id of targets) if (tl.nodes[id].status === 'ready') tl.nodes[id].stale = true;
 }

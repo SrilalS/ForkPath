@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Timeline, TimelineSummary, TLNode } from '../../shared/types.ts';
+import { WorldIndex } from '../../shared/world.ts';
 import { migrateTimeline } from './migrate.ts';
 
 export const DATA_DIR = path.resolve(import.meta.dirname, '../../data');
@@ -95,20 +96,8 @@ export function childrenOf(tl: Timeline, nodeId: string): TLNode[] {
 }
 
 /** Everything downstream, through primary and convergence links. Each node once. */
-export function descendantsOf(tl: Timeline, nodeId: string): TLNode[] {
-  const seen = new Set<string>();
-  const out: TLNode[] = [];
-  const stack = [nodeId];
-  while (stack.length) {
-    const id = stack.pop()!;
-    for (const child of childrenOf(tl, id)) {
-      if (seen.has(child.id)) continue;
-      seen.add(child.id);
-      out.push(child);
-      stack.push(child.id);
-    }
-  }
-  return out;
+export function descendantsOf(tl: Timeline, nodeId: string, ix = new WorldIndex(tl)): TLNode[] {
+  return ix.descendants(nodeId);
 }
 
 /** Everything upstream, through primary and convergence links. */

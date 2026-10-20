@@ -13,6 +13,7 @@ import {
   makeNode,
   newId,
   now,
+  parentIdsOf,
   saveTimeline,
 } from './store.ts';
 import { addClient, broadcast } from './events.ts';
@@ -28,7 +29,15 @@ import {
   workerStatus,
 } from './jobs.ts';
 import { buildBrief } from './brief.ts';
-import { addLink, applyContinue, applyRegenerate, markStaleFrom, removeLinksFor } from './apply.ts';
+import {
+  addLink,
+  applyContinue,
+  applyRegenerate,
+  chronologyIssues,
+  continueChronology,
+  markStaleFrom,
+  removeLinksFor,
+} from './apply.ts';
 import {
   continueResult,
   deviationInput,
@@ -449,6 +458,11 @@ app.get('/api/worker/next', async (req, res) => {
 
 app.get('/api/worker/jobs/:jobId', h((req) => jobPayload(String(req.params.jobId))));
 
+/** A node dated before what it follows breaks the timeline; nothing is saved and the worker fixes it. */
+function rejectChronology(issues: string[]) {
+  if (issues.length) throw new HttpError(400, `Chronology:\n${issues.map((i) => `- ${i}`).join('\n')}`);
+}
+
 app.post(
   '/api/worker/jobs/:jobId/result',
   h((req) => {
@@ -471,6 +485,7 @@ app.post(
         finishJob(job, 'cancelled');
         throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
       }
+      rejectChronology(continueChronology(tl, job, result));
       const report = applyContinue(tl, job, result);
       finishJob(job, 'done');
       commit(tl);
@@ -483,6 +498,7 @@ app.post(
       finishJob(job, 'cancelled');
       throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
     }
+    rejectChronology(chronologyIssues(tl, [result.node], parentIdsOf(node)));
     const report = applyRegenerate(tl, node, result);
     finishJob(job, 'done');
     commit(tl);
