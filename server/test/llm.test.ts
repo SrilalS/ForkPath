@@ -95,10 +95,14 @@ test('anthropic: tool_use round trip, cached system prompt, headers', async () =
     assert.deepEqual(first.body.system, [{ type: 'text', text: 'SYSTEM', cache_control: { type: 'ephemeral' } }]);
     assert.equal(first.body.max_tokens, 4000);
     assert.equal(first.body.tools[0].input_schema.type, 'object');
+    // The newest block carries the cache breakpoint, so the next request reads the brief from cache.
+    assert.deepEqual(first.body.messages, [{ role: 'user', content: [{ type: 'text', text: 'BRIEF', cache_control: { type: 'ephemeral' } }] }]);
     assert.deepEqual(second.body.messages.at(-1), {
       role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: 't1', content: 'RESULTS for "x": 1 of 1' }],
+      content: [{ type: 'tool_result', tool_use_id: 't1', content: 'RESULTS for "x": 1 of 1', cache_control: { type: 'ephemeral' } }],
     });
+    assert.equal(second.body.messages[0].content, 'BRIEF', 'older messages carry no breakpoint');
+    assert.equal(second.body.tool_choice.type, 'auto');
     assert.deepEqual(s.usage, { inputTokens: 910, outputTokens: 40, cachedInputTokens: 400, requests: 2, toolCalls: 1 });
   } finally {
     await srv.close();

@@ -141,7 +141,13 @@ Every Continue, Branch, Merge, Influence and Regenerate form has these, stored p
 - **Follow-ups**: when an event hits another stream hard, it can request up to 2 events after that stream's latest
   one. They run as parallel jobs and cannot request more.
 - **Renames a stream** when its focus has moved on (a "Vietnam War" thread that is now about Iran).
-- Results whose dates run backwards (before the event they continue) are rejected and sent back for fixing.
+- Results are checked before anything is saved, and sent back for fixing when they break a rule: unknown
+  fields, dates that run backwards or have no year, links or follow-ups to events that do not exist (or are
+  not the latest in their stream), follow-ups from alternatives, an alternative with over 75% of the odds, or
+  an INFLUENCE result without its note.
+- Long chains stay cheap: the brief gives only key changes for all but the last 8 events, and only the
+  influence links on the last 3. The built-in engine caches the writer rules and the brief across a job's
+  requests (Anthropic).
 
 ## File format versioning
 

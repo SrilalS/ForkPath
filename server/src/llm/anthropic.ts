@@ -12,6 +12,20 @@ type Block =
   | { type: string; [k: string]: unknown }; // thinking and other blocks are passed back untouched
 type Message = { role: 'user' | 'assistant'; content: string | Block[] };
 
+/**
+ * The messages with a cache breakpoint on the last block, so each request in a job (tool rounds, repairs)
+ * reads the brief and everything before it from cache instead of paying for it again. The stored history
+ * stays unmarked: only the newest end carries a breakpoint (the API allows 4 per request).
+ */
+function withCacheBreakpoint(messages: Message[]): Message[] {
+  const last = messages.at(-1);
+  if (!last) return messages;
+  const blocks: Block[] = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content;
+  if (!blocks.length) return messages;
+  const marked = [...blocks.slice(0, -1), { ...blocks.at(-1)!, cache_control: { type: 'ephemeral' } }];
+  return [...messages.slice(0, -1), { ...last, content: marked }];
+}
+
 export function anthropicProvider(cfg: ResolvedBuiltin): Provider {
   return {
     label: `${cfg.model} via Anthropic${/anthropic\.com/.test(cfg.baseUrl) ? '' : ` (${hostLabel(cfg.baseUrl)})`}`,
@@ -44,17 +58,18 @@ class AnthropicSession implements ChatSession {
   async ask(text: string): Promise<string> {
     this.messages.push({ role: 'user', content: text });
     for (let round = 0; round < this.opts.maxToolCalls + 4; round++) {
-      const allowTools = this.toolCallsLeft > 0 && this.opts.tools.length > 0;
       const body: Record<string, unknown> = {
         model: this.cfg.model,
         max_tokens: this.opts.maxOutputTokens,
         // The writer instructions are the same for every job: cache them.
         system: [{ type: 'text', text: this.opts.system, cache_control: { type: 'ephemeral' } }],
-        messages: this.messages,
+        messages: withCacheBreakpoint(this.messages),
       };
       if (this.opts.tools.length) {
         body.tools = this.opts.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
-        body.tool_choice = { type: allowTools ? 'auto' : 'none' };
+        // Always "auto": changing tool_choice mid-job invalidates the cached messages. Past the budget,
+        // runTool answers "budget used up" instead.
+        body.tool_choice = { type: 'auto' };
       }
       const res = await postJson(`${this.cfg.baseUrl}/messages`, this.headers(), body, this.opts);
       this.usage.requests++;

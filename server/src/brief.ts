@@ -15,13 +15,22 @@ import { MAX_FOLLOW_UPS } from './schema.ts';
  * changes, which carry their facts. (Three full narratives cost ~2k input tokens per job for little gain.)
  */
 const FULL_NARRATIVE_DEPTH = 1;
+/**
+ * The last this-many chain nodes show their summary; older ones show title, period and key changes only
+ * (what an old event leaves behind). Keeps a deep chain from growing the brief by ~350 tokens per node.
+ */
+const SUMMARY_DEPTH = 8;
+/** Influence links are listed when they touch one of the last this-many chain nodes. */
+const RECENT_LINK_DEPTH = 3;
 /** At most this many nearby events from other streams are listed, the closest in time first. */
 const MAX_NEARBY = 8;
 
 const FIELD_HINT =
   'significance: minor | notable | major | pivotal. tone: neutral | conflict | catastrophe | upheaval | decline | prosperity | discovery | diplomacy. strength: mild | moderate | strong.';
 
-function describeNode(tl: Timeline, n: TLNode, index: number, full: boolean): string {
+type Detail = 'compact' | 'summary' | 'full';
+
+function describeNode(tl: Timeline, n: TLNode, index: number, detail: Detail): string {
   const tags: string[] = [`id: ${n.id}`];
   if (n.kind === 'deviation') tags.push(index === 0 ? 'POINT OF DIVERGENCE' : 'NEW USER DEVIATION');
   if (n.threadName) tags.push(`STARTS THREAD "${n.threadName}"`);
@@ -34,16 +43,23 @@ function describeNode(tl: Timeline, n: TLNode, index: number, full: boolean): st
     const p = tl.nodes[id];
     if (p) lines.push(`(Also follows from a parallel storyline that ended with "${p.title}" (${p.period}): ${p.summary})`);
   }
-  if (n.summary) lines.push(n.summary);
+  // Deviations keep their summary at any depth: they are what the user wrote, often with no key changes.
+  if (n.summary && (detail !== 'compact' || n.kind === 'deviation' || !n.keyChanges.length)) lines.push(n.summary);
   if (n.keyChanges.length) lines.push(`Key changes: ${n.keyChanges.join('; ')}`);
-  if (full && n.narrative) lines.push('', n.narrative);
+  if (detail === 'full' && n.narrative) lines.push('', n.narrative);
   return lines.join('\n');
 }
 
 function chainSection(tl: Timeline, nodes: TLNode[], offset = 0): string {
-  return nodes
-    .map((n, i) => describeNode(tl, n, i + offset, i >= nodes.length - FULL_NARRATIVE_DEPTH))
-    .join('\n\n');
+  const detail = (i: number): Detail => {
+    const fromEnd = nodes.length - i;
+    return fromEnd <= FULL_NARRATIVE_DEPTH ? 'full' : fromEnd <= SUMMARY_DEPTH ? 'summary' : 'compact';
+  };
+  const compact = nodes.length - SUMMARY_DEPTH;
+  return [
+    ...(compact > 0 ? [`(The first ${compact} entries show key changes only. To read one in full, pass its id to show_event, or to search.mjs --node.)`] : []),
+    ...nodes.map((n, i) => describeNode(tl, n, i + offset, detail(i))),
+  ].join('\n\n');
 }
 
 /** The part of otherId's path that is not shared with `primary` (from the fork point onward). */
@@ -92,22 +108,31 @@ function threadContext(
 ): string[] {
   const out: string[] = [];
   const inChain = new Set(chain.map((n) => n.id));
+  const nearby = nearbyEvents(tl, anchor, new Set([...exclude, ...inChain]), anchorYear);
 
-  const links = tl.links.filter((l) => (inChain.has(l.from) || inChain.has(l.to)) && tl.nodes[l.from] && tl.nodes[l.to]);
+  // Only links on the recent end of the chain: older ones are settled history, already reflected in the
+  // chain's key changes (a time window would not help: a busy timeline fits inside one).
+  const recent = new Set(chain.slice(-RECENT_LINK_DEPTH).map((n) => n.id));
+  const touching = tl.links.filter((l) => (inChain.has(l.from) || inChain.has(l.to)) && tl.nodes[l.from] && tl.nodes[l.to]);
+  const links = touching.filter((l) => recent.has(l.from) || recent.has(l.to));
   if (links.length) {
     out.push('', '## Influence links touching this storyline');
+    // Each outside event's summary once, and not at all when the nearby list below already gives it.
+    const described = new Set(nearby.map((c) => c.node.id));
     for (const l of links) {
       const f = tl.nodes[l.from];
       const t = tl.nodes[l.to];
       out.push(
         `- ${short(f)} in stream "${streamLabel(tl, f.id)}" --${l.strength}--> ${short(t)}${l.note ? `: ${l.note}` : ''}`,
       );
-      // The far end of an incoming link is outside this chain, so give its content.
-      if (!inChain.has(f.id)) out.push(`  ${f.summary}`);
+      if (!inChain.has(f.id) && !described.has(f.id)) {
+        described.add(f.id);
+        out.push(`  ${firstSentence(f.summary)}`);
+      }
     }
+    if (touching.length > links.length) out.push(`(${touching.length - links.length} older links omitted: settled history.)`);
   }
 
-  const nearby = nearbyEvents(tl, anchor, new Set([...exclude, ...inChain]), anchorYear);
   if (nearby.length && anchorYear !== null) {
     out.push(
       '',
@@ -207,8 +232,14 @@ export function calibrationLines(tl: Timeline, exclude: string): string[] {
       : high < highTarget - 0.15
         ? 'Major and pivotal ratings are rare here: do not hold back when this development genuinely reshapes a region or era.'
         : 'The mix is on target; keep rating each node on its own merits.';
+  // Writers rarely call their own event minor, so quiet stretches get inflated to notable.
+  const minorAdvice =
+    share('minor') < 0.1
+      ? ['Minor is almost unused: consolidation, quiet years and local effects are minor, and saying so is accurate, not dismissive.']
+      : [];
   return [
     `Significance so far in this timeline (${rated.length} events): ${mix.join(', ')}.`,
+    ...minorAdvice,
     // The mix is about labels. Without this, "over-used" can read as "write calmer events".
     `${advice} This is about the RATING only: never make what happens bigger or smaller to fit the mix.`,
   ];
@@ -254,7 +285,7 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node', mod
     job.type === 'influence'
       ? `{ "children": [ { ${node}, "influences": [], "influencedBy": [] } ], "influenceNote": "" }`
       : shape === 'children'
-        ? `{ "children": [ { ${node}, "likelihood": 1, "influences": [], "influencedBy": [], "spawnThreads": [] } ], "branchReason": "", "threads": [] }`
+        ? `{ "children": [ { ${node}, "influences": [], "influencedBy": [], "spawnThreads": [] } ], "threads": [] }`
         : `{ "node": { ${node}, "influences": [], "influencedBy": [] } }`;
   const lines = [
     ...searchSection(job, mode),
@@ -513,7 +544,7 @@ export function buildBrief(job: Job, tl: Timeline, mode: BriefMode = 'worker'): 
     parts.push(
       '',
       '## Outdated version of this node (for reference only)',
-      describeNode(tl, target, chain.length, true),
+      describeNode(tl, target, chain.length, 'full'),
       ...threadContext(tl, [...chain, target], target, new Set([target.id])),
       ...responseSection(job, tl, 'node', mode),
     );

@@ -1,7 +1,7 @@
 // Applies worker results and link edits to a timeline. Pure functions over the Timeline object (no I/O),
 // so they can be tested without the HTTP layer.
 import type { InfluenceLink, Job, Strength, Timeline, TLNode } from '../../shared/types.ts';
-import { canLink, INFLUENCE_WINDOW_YEARS, startYear, WorldIndex } from '../../shared/world.ts';
+import { canLink, effectiveYear, INFLUENCE_WINDOW_YEARS, startYear, streamNameOf, WorldIndex } from '../../shared/world.ts';
 import { parsePeriodStart } from '../../shared/time.ts';
 import { descendantsOf, makeNode, newId, now } from './store.ts';
 import type { continueResult, LinkRef, regenerateResult, threadStart } from './schema.ts';
@@ -87,6 +87,10 @@ function applyLinkRefs(
   for (const ref of refs.influencedBy ?? []) one(nodeId, ref, 'in');
 }
 
+/** A streamName only renames when it differs from the stream's current name (models often repeat it). */
+const isRename = (name: string | undefined, current: string | undefined): name is string =>
+  !!name && name.trim().toLowerCase() !== (current ?? '').trim().toLowerCase();
+
 function fill(node: TLNode, c: Omit<ThreadStart, 'thread' | 'influences' | 'influencedBy' | 'key'>, ts: string) {
   Object.assign(node, {
     title: c.title,
@@ -128,11 +132,14 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
     if (written.key) keys.set(written.key, node.id);
   };
 
-  result.children.forEach((c) => {
+  const currentName = streamNameOf(tl, job.targetNodeId);
+  // Most likely first, so creation order (and the layout) matches the odds whatever order they came in.
+  const children = branching ? [...result.children].sort((a, b) => (b.likelihood ?? 0) - (a.likelihood ?? 0)) : result.children;
+  children.forEach((c) => {
     const node = nextUnderTarget();
     fill(node, c, ts);
     remember(node, c);
-    if (c.streamName) node.streamName = c.streamName;
+    if (isRename(c.streamName, currentName)) node.streamName = c.streamName;
     node.likelihood = branching ? (c.likelihood ?? 0) / total : undefined;
     node.branchReason = branching ? result.branchReason : undefined;
     tl.nodes[node.id] = node;
@@ -179,7 +186,8 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
 export function applyRegenerate(tl: Timeline, node: TLNode, result: RegenerateResult): ApplyReport {
   const { influences, influencedBy, streamName, ...content } = result.node;
   fill(node, content, now());
-  if (streamName) node.streamName = streamName; // a rename stays unless the writer gives a new one
+  // A rename stays unless the writer gives a new one.
+  if (isRename(streamName, node.parentId ? streamNameOf(tl, node.parentId) : undefined)) node.streamName = streamName;
   node.source = 'llm';
   markStaleFrom(tl, node.id);
   const report: ApplyReport = { created: [], links: 0, dropped: [], followUps: [] };
@@ -235,6 +243,83 @@ export function continueChronology(tl: Timeline, job: Job, result: ContinueResul
       }
     }
   }
+  return issues;
+}
+
+/**
+ * Written nodes whose period has no readable start year, in a timeline where the node they follow has one.
+ * Without a year the chronology check and the time layout cannot place them. Undated worlds are left alone.
+ */
+function undatedIssues(tl: Timeline, written: { title: string; period: string }[], after: string): string[] {
+  if (effectiveYear(tl, after) === null) return [];
+  return written
+    .filter((w) => periodYear(w.period) === null)
+    .map((w) => `"${w.title}": period "${w.period}" has no readable year. Start it with one, e.g. "1864", "Summer 1940", "1990s".`);
+}
+
+/** Link refs that point at nothing: an unknown id, or an "@key" that no node in this result has. */
+function refIssues(tl: Timeline, written: ({ title: string } & Parameters<typeof applyLinkRefs>[2])[], keys: Set<string>): string[] {
+  return written.flatMap((w) =>
+    [...(w.influences ?? []), ...(w.influencedBy ?? [])].flatMap((r) => {
+      if (r.node.startsWith('@')) return keys.has(r.node.slice(1)) ? [] : [`"${w.title}": link to ${r.node}, but no node in this result has that key.`];
+      return tl.nodes[r.node] ? [] : [`"${w.title}": link to ${r.node}, but no event has that id. Use ids from the brief or a search.`];
+    }),
+  );
+}
+
+/**
+ * Everything wrong with a CONTINUE, MERGE or INFLUENCE result that the schema cannot see because it needs the
+ * timeline: chronology, undated periods, broken link refs, follow-up targets, a missing influence note. Each
+ * entry is a message for the writer; any entry means nothing is applied and the writer fixes and resubmits.
+ * Link-rule violations (same path, different worlds, too far ahead) are not here: those links are dropped.
+ */
+export function continueIssues(tl: Timeline, job: Job, result: ContinueResult, maxFollowUpDepth: number): string[] {
+  const issues = continueChronology(tl, job, result);
+  const spawned = result.children.flatMap((c) => c.spawnThreads ?? []);
+  const written = [...result.children, ...spawned, ...result.threads];
+  issues.push(...undatedIssues(tl, written, job.targetNodeId));
+  const keys = new Set(written.map((w) => w.key).filter((k): k is string => !!k));
+  issues.push(...refIssues(tl, written, keys));
+  if (job.type === 'influence' && !result.influenceNote) {
+    issues.push('influenceNote is required on INFLUENCE: one sentence on the effect, shown on the arrow.');
+  }
+  const followUps = result.children.flatMap((c) => c.followUps ?? []);
+  if (followUps.length && (job.followUpDepth ?? 0) >= maxFollowUpDepth) {
+    issues.push('This job is itself a follow-up, so it cannot request followUps. Remove them (use influences links instead).');
+  } else if (followUps.length) {
+    const ix = new WorldIndex(tl);
+    for (const f of followUps) {
+      const t = tl.nodes[f.target];
+      if (!t) issues.push(`followUps target ${f.target}: no event has that id.`);
+      else if (!ix.isTip(t.id)) issues.push(`followUps target "${t.title}" is not the latest event in its stream. Use one marked "latest in stream".`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * Everything wrong with a REGENERATE result: it must still start no earlier than its parents and no later
+ * than its earliest child, carry a year, and link only to real nodes.
+ */
+export function regenerateIssues(tl: Timeline, node: TLNode, result: RegenerateResult): string[] {
+  const issues = chronologyIssues(tl, [result.node], [node.parentId, ...(node.mergeParents ?? [])].filter((p): p is string => !!p));
+  if (node.parentId) issues.push(...undatedIssues(tl, [result.node], node.parentId));
+  const y = periodYear(result.node.period);
+  if (y !== null) {
+    const later = new WorldIndex(tl)
+      .children(node.id)
+      // Stale children get rewritten next, so they may move with it (an edit that shifted the dates).
+      .filter((c) => !c.stale && c.status === 'ready')
+      .map((c) => ({ c, year: periodYear(c.period) }))
+      .filter((x): x is { c: TLNode; year: number } => x.year !== null && x.year < y)
+      .sort((a, b) => a.year - b.year)[0];
+    if (later) {
+      issues.push(
+        `"${result.node.title}" (${result.node.period}) starts after "${later.c.title}" (${later.c.period}), which follows it. Start it in ${later.year} or earlier.`,
+      );
+    }
+  }
+  issues.push(...refIssues(tl, [result.node], new Set()));
   return issues;
 }
 

@@ -14,7 +14,6 @@ import {
   makeNode,
   newId,
   now,
-  parentIdsOf,
   saveTimeline,
 } from './store.ts';
 import { addClient, broadcast } from './events.ts';
@@ -41,9 +40,9 @@ import {
   applyContinue,
   applyRegenerate,
   type ApplyReport,
-  chronologyIssues,
-  continueChronology,
+  continueIssues,
   markStaleFrom,
+  regenerateIssues,
   putLink,
   removeLinksFor,
 } from './apply.ts';
@@ -646,8 +645,9 @@ app.get(
 );
 
 /** A node dated before what it follows breaks the timeline; nothing is saved and the worker fixes it. */
-function rejectChronology(issues: string[]) {
-  if (issues.length) throw new HttpError(400, `Chronology:\n${issues.map((i) => `- ${i}`).join('\n')}`);
+/** A result that the schema accepted but the timeline does not: nothing is applied, the writer fixes it. */
+function rejectIssues(issues: string[]) {
+  if (issues.length) throw new HttpError(400, `Fix these and resubmit:\n${issues.map((i) => `- ${i}`).join('\n')}`);
 }
 
 /**
@@ -674,7 +674,7 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
       finishJob(job, 'cancelled');
       throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
     }
-    rejectChronology(continueChronology(tl, job, result));
+    rejectIssues(continueIssues(tl, job, result, MAX_FOLLOW_UP_DEPTH));
     const report = applyContinue(tl, job, result);
     stampGeneration(tl, job, report.created.map((c) => c.id), gen);
     const followUps = startFollowUps(tl, job, report.followUps);
@@ -689,7 +689,7 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
     finishJob(job, 'cancelled');
     throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
   }
-  rejectChronology(chronologyIssues(tl, [result.node], parentIdsOf(node)));
+  rejectIssues(regenerateIssues(tl, node, result));
   const report = applyRegenerate(tl, node, result);
   stampGeneration(tl, job, [node.id], gen);
   finishJob(job, 'done');

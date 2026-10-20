@@ -32,13 +32,16 @@ const nodeContent = {
   period: text(80),
   summary: text(800),
   narrative: text(8000),
-  keyChanges: z.array(text(300)).min(1).max(10),
+  keyChanges: z.array(text(300)).min(2, 'give 3-6 key changes').max(8, 'give 3-6 key changes'),
   significance,
   tone,
 };
 
+// Model results are strict: an unknown or misspelled field ("influenced_by", followUps on a thread start)
+// is INVALID and gets fixed, instead of being silently dropped.
+
 /** The first node of a new parallel thread (nested in a child, or top-level from the node being continued). */
-export const threadStart = z.object({ thread: text(80), ...nodeContent, ...links });
+export const threadStart = z.strictObject({ thread: text(80), ...nodeContent, ...links });
 
 /**
  * "This node's immediate consequences in another stream deserve their own event": the server queues an
@@ -56,9 +59,12 @@ const followUp = z.object({
 export const MAX_FOLLOW_UPS = 2;
 
 /** Renames the stream from this node on, when its focus has clearly moved on from its current name. */
-const streamName = z.string().trim().min(1).max(80).optional();
+const streamName = z.string().trim().min(1).max(48).optional();
 
-export const generatedNode = z.object({
+/** Above this normalized share one outcome clearly dominates, so branching is not warranted. */
+export const MAX_ALTERNATIVE_SHARE = 0.75;
+
+export const generatedNode = z.strictObject({
   ...nodeContent,
   streamName,
   likelihood: z.number().gt(0).lte(1).optional(),
@@ -68,7 +74,7 @@ export const generatedNode = z.object({
 });
 
 export const continueResult = z
-  .object({
+  .strictObject({
     /** Alternatives: only one of them happens. */
     children: z.array(generatedNode).max(4).default([]),
     branchReason: z.string().trim().max(600).optional(),
@@ -93,14 +99,36 @@ export const continueResult = z
     if (!val.branchReason) {
       ctx.addIssue({ code: 'custom', path: ['branchReason'], message: 'required when returning 2-4 children' });
     }
+    // Only one alternative happens, so a follow-up from one of them would land in the other stream as canon.
     val.children.forEach((c, i) => {
-      if (c.likelihood === undefined) {
-        ctx.addIssue({ code: 'custom', path: ['children', i, 'likelihood'], message: 'required when branching' });
+      if (c.followUps?.length) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['children', i, 'followUps'],
+          message: 'not allowed when branching (only one alternative happens); use influences links instead',
+        });
       }
     });
+    if (val.children.some((c) => c.likelihood === undefined)) {
+      val.children.forEach((c, i) => {
+        if (c.likelihood === undefined) {
+          ctx.addIssue({ code: 'custom', path: ['children', i, 'likelihood'], message: 'required when branching' });
+        }
+      });
+      return;
+    }
+    const total = val.children.reduce((s, c) => s + c.likelihood!, 0);
+    const top = Math.max(...val.children.map((c) => c.likelihood!)) / total;
+    if (top > MAX_ALTERNATIVE_SHARE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['children'],
+        message: `one outcome has ${Math.round(top * 100)}% of the total: it clearly dominates, so return only that child (no likelihood, no branchReason)`,
+      });
+    }
   });
 
-export const regenerateResult = z.object({ node: z.object({ ...nodeContent, streamName, ...links }) });
+export const regenerateResult = z.strictObject({ node: z.strictObject({ ...nodeContent, streamName, ...links }) });
 
 export type LinkRef = z.infer<typeof linkRef>;
 

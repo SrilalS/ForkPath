@@ -110,7 +110,7 @@ what happens bigger or smaller to fit the mix.
 | `discovery` | Exploration, science, invention, new contact |
 | `diplomacy` | Treaties, alliances, unions, negotiated settlements |
 
-`branchReason` (CONTINUE only, required when branching): 1-2 sentences naming the uncertainty that splits the
+`branchReason` (only when returning 2-4 children, then required): 1-2 sentences naming the uncertainty that splits the
 paths, e.g. "Whether Britain intervenes hinges on a cabinet vote that could plausibly go either way."
 
 ---
@@ -154,9 +154,10 @@ paths, e.g. "Whether Britain intervenes hinges on a cabinet vote that could plau
 
 ---
 
-## 4. When to branch (CONTINUE only)
+## 4. When to branch
 
-Return **one** child by default. Return **2 to 4** children only when one of these is true:
+Applies to CONTINUE, MERGE and INFLUENCE (rarely for the last two); REGENERATE never branches. Return
+**one** child by default. Return **2 to 4** children only when one of these is true:
 
 - 🔀 **Genuine coin flip:** two or more outcomes are roughly equally likely (no option above ~60%), e.g. a
   close election, a battle that could go either way, a leader's uncertain succession.
@@ -173,9 +174,12 @@ not, it is not the most likely outcome.
 When branching:
 
 - Each child is a full node covering the same time span, written as if its outcome is what happened.
-- Each child has a `likelihood`. They should roughly sum to 1.
+- Each child has a `likelihood`. They should roughly sum to 1. If one would get more than 75% of the total,
+  it clearly dominates: return only that child (`INVALID` otherwise).
 - Give one shared `branchReason`.
 - Order children from most to least likely.
+- No `followUps` on any child: only one alternative happens, so a follow-up would make it canon elsewhere.
+  Use `influences` links instead.
 
 ---
 
@@ -237,21 +241,25 @@ up to 8 events within 15 years of your node, closest first. For each one, ask:
 a weapons program, a treaty, a migration, a grudge. At most 3 searches per job; skip it when the nearby
 list already covers what matters.
 
+<!-- worker-only -->
 ```
 node worker/search.mjs <jobId> "thorium reactor"              best 6 matches
 node worker/search.mjs <jobId> "tamil refugees" --before 1980 only events starting before 1980
 node worker/search.mjs <jobId> --node <id>                    one event in full (summary, key changes, narrative)
 ```
+<!-- /worker-only -->
 
 - Results only contain events your node may link to (other streams, same world, not too far ahead).
-- Events older than 15 years show only their **key changes**: that is what an old event leaves behind. Use
-  `--node` only when you need the full story.
+- Events older than 15 years show only their **key changes**: that is what an old event leaves behind. Ask
+  for one event in full only when you need the full story. The same goes for the oldest entries of a long
+  chain in the brief, which show key changes only.
 - Keywords match titles, key changes, summaries and narratives. Use 1-3 distinctive words, not sentences.
 
 - `node` is an id shown in the brief (`[id: ...]`), or `@key` for another node in the same result (give that
   node a `"key"`). Use `@key` to connect parallel threads you start together.
 - `strength`: `mild` (nudges it), `moderate` (clearly shapes it), `strong` (largely drives it).
 - `note`: one sentence on the effect.
+- An id that does not exist, or an `@key` no node in the result has, gives `INVALID`.
 - The server drops links that break the rules and reports them in the `OK` line (not an error, nothing to
   fix): events on the same path, under different exclusive alternatives (siblings with likelihoods), an
   influence on an event that started more than 5 years before the influencing one, or `influences` from your
@@ -280,10 +288,11 @@ after `target`, shaped by your child.
 | `followUps` | The immediate consequence there is a development of its own (a crisis, a policy turn, a war) that the stream should not skip. |
 
 - `target` must be an event marked **latest in stream** in the nearby list or a search result. Anything else
-  is skipped (it would create an alternative instead of extending the stream).
-- At most 2 per result, across all children. `guidance` says what the other writer should show; be specific.
-- A job that is itself a follow-up (its brief says so) cannot request more. One click never cascades further.
-- The `OK` line lists `follow-up queued` and `follow-up skipped` (with the reason). A skip is not an error.
+  gives `INVALID` (it would create an alternative instead of extending the stream).
+- At most 2 per result, across all children, and none when you branch. `guidance` says what the other writer
+  should show; be specific.
+- A job that is itself a follow-up (its brief says so) cannot request more (`INVALID`). One click never
+  cascades further.
 
 ---
 
@@ -412,8 +421,12 @@ Guidance: "One branch on India's southern states, another on Sri Lanka rebuildin
 | 🎨 | `significance` and `tone` are required on every node, including REGENERATE. Missing them gives `INVALID`. |
 | 🧵 | Top-level `threads` start from the node being continued; `spawnThreads` go **inside** a child and start from it. Thread starts have `thread` but no `likelihood`. |
 | 🔀 | "Make two branches, one on X and one on Y" about things happening at the same time = two top-level `threads`, never a child with a thread chained under it. |
-| 🔗 | Link ids must come from the brief. A made-up id is dropped and reported in the `OK` line. |
+| 🔗 | Link and follow-up ids must come from the brief or a search. A made-up id gives `INVALID`. |
+| 🚫 | Only the fields shown here. An unknown or misspelled field (`influenced_by`, `followUps` on a thread start, `likelihood` on REGENERATE) gives `INVALID`. |
+| 📅 | A node may not start in an earlier year than the node it follows (for MERGE: the latest branch ending; for INFLUENCE: also the influencing event; for a spawned thread: its child). A REGENERATE node may not start after its own next event. Every `period` needs a readable year. Any of these gives `INVALID` with a "Fix these" list. |
+| 💬 | INFLUENCE results need `influenceNote`. |
+| 🔁 | `INVALID` means nothing was saved. Fix it and submit again. |
+<!-- worker-only -->
 | 🧹 | `submit.mjs` deletes the result file on success, so a stale file never gets resubmitted. |
-| 📅 | A node may not start in an earlier year than the node it follows (for MERGE: the latest branch ending; for a spawned thread: its child). That gives `INVALID` with a `Chronology:` list. |
-| 🔁 | `INVALID` means nothing was saved. Fix the file and run `submit.mjs` again with the same id. |
-| 💬 | Your final message is the one-line report from section 1, nothing more. The dispatcher's context is what this whole setup protects. |
+| 📣 | Your final message is the one-line report from section 1, nothing more. The dispatcher's context is what this whole setup protects. |
+<!-- /worker-only -->

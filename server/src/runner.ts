@@ -30,7 +30,9 @@ function writerPrompt(): string {
   const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
   // Section 1 is the command sequence for the shell-based worker; the preamble replaces it.
   const withoutSteps = body.replace(/\n## 1\. Your steps[\s\S]*?\n---\n/, '\n');
-  return API_PREAMBLE + withoutSteps.trim();
+  // Shell commands and dispatcher etiquette, marked in the file, mean nothing to an API call.
+  const apiOnly = withoutSteps.replace(/<!-- worker-only -->[\s\S]*?<!-- \/worker-only -->\n?/g, '');
+  return API_PREAMBLE + apiOnly.trim();
 }
 
 function toolsFor(job: Job): ToolSpec[] {
