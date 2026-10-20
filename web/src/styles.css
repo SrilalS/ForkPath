@@ -1039,6 +1039,8 @@ textarea:focus {
   position: relative;
   height: 100%;
   overflow-y: auto;
+  /* The decorative glow is wider than narrow windows; it must not add a horizontal scrollbar. */
+  overflow-x: hidden;
   padding: 10vh 24px 48px;
 }
 .landing__glow {
@@ -2058,4 +2060,109 @@ a.btn--ghost {
   .doc__row--head {
     display: none;
   }
+}
+
+/* ---- settings ------------------------------------------------------------ */
+
+.settings .doc__section.form {
+  gap: 14px;
+}
+.settings h3 {
+  margin: 10px 0 0;
+  font-size: 15px;
+}
+.settings__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.settings__status.is-ok {
+  border-color: rgba(79, 209, 160, 0.35);
+}
+.settings__status.is-warn {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--border));
+}
+.settings__inline {
+  display: flex;
+  gap: 8px;
+}
+.settings__inline input {
+  flex: 1;
+  min-width: 0;
+}
+.settings__advanced {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+}
+.settings__advanced summary {
+  cursor: pointer;
+  color: var(--text-2);
+}
+.settings__advanced[open] summary {
+  margin-bottom: 10px;
+}
+.settings__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 8px;
+}
+.settings__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.settings__stat strong {
+  font-size: 20px;
+}
+.settings__meter {
+  height: 8px;
+  margin-top: 10px;
+  border-radius: 99px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.settings__meter span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), var(--amber), var(--red));
+  background-size: 300% 100%;
+}
+.settings__recent .doc__row {
+  grid-template-columns: 170px minmax(0, 1fr) 260px;
+}
+.alert--ok {
+  border: 1px solid;
+  border-color: rgba(79, 209, 160, 0.4);
+  background: rgba(79, 209, 160, 0.1);
+}
+.link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-soft);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+@media (max-width: 720px) {
+  .settings__recent .doc__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.panel__generation {
+  margin: 18px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }

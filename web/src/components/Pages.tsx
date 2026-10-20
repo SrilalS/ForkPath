@@ -300,6 +300,12 @@ export function GuidePage() {
           until I tell you to stop.
         </pre>
         <p className="muted small">After the app is updated, restart the worker session so it re-reads its instructions.</p>
+        <p>
+          <strong>No Claude Code?</strong> In <strong>Settings</strong>, switch the engine to <strong>Built-in model API</strong>:
+          the app then calls a model itself (Anthropic, OpenAI, Gemini, OpenRouter, or a local Ollama / LM Studio). Results follow
+          the same rules. Settings also tracks tokens and cost, and can cap monthly spending. The bottom of each card&apos;s side
+          panel shows which model wrote it.
+        </p>
       </Section>
 
       <Section id="files" icon="💾" title="Saving and files">

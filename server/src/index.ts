@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
-import { SCHEMA_VERSION, type Job, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
+import { SCHEMA_VERSION, type Generation, type Job, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
 import { streamLabel, WorldIndex } from '../../shared/world.ts';
 import { buildExport, exportFileName, importFile } from './transfer.ts';
 import { MigrationError } from './migrate.ts';
@@ -31,7 +31,9 @@ import {
 } from './jobs.ts';
 import { buildBrief } from './brief.ts';
 import { searchForJob, showNode } from './search.ts';
-import { publicConfig, updateConfig } from './config.ts';
+import { builtinProblem, getConfig, publicConfig, resolveBuiltin, updateConfig } from './config.ts';
+import { monthSummary, recentUsage } from './usage.ts';
+import { listModels, probe } from './llm/probe.ts';
 import { startRunner } from './runner.ts';
 import {
   addLink,
@@ -58,6 +60,11 @@ import {
 
 // Not PORT: dev tooling often sets PORT for the web server, which would collide with Vite.
 const PORT = Number(process.env.ALTHISTORY_API_PORT ?? 5174);
+/**
+ * Loopback only by default: the API can store a model API key and spend money, and has no login. Set
+ * ALTHISTORY_HOST=0.0.0.0 only on a trusted network.
+ */
+const HOST = process.env.ALTHISTORY_HOST ?? '127.0.0.1';
 const MAX_WAIT_S = 590;
 
 const app = express();
@@ -615,7 +622,7 @@ function rejectChronology(issues: string[]) {
  * Validates and applies a job result: what submit.mjs posts for the external worker, and what the built-in
  * runner passes in directly. Throws HttpError: 400 = invalid (fix and resubmit), 410 = discard.
  */
-function submitResult(jobId: string, body: unknown) {
+function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
   const job = getJob(jobId);
   if (!job) throw new HttpError(404, 'Job not found');
   if (job.status === 'cancelled') throw new HttpError(410, 'Job was cancelled by the user. Discard it and move on.');
@@ -637,6 +644,7 @@ function submitResult(jobId: string, body: unknown) {
     }
     rejectChronology(continueChronology(tl, job, result));
     const report = applyContinue(tl, job, result);
+    stampGeneration(tl, job, report.created.map((c) => c.id), gen);
     const followUps = startFollowUps(tl, job, report.followUps);
     finishJob(job, 'done');
     commit(tl);
@@ -651,9 +659,26 @@ function submitResult(jobId: string, body: unknown) {
   }
   rejectChronology(chronologyIssues(tl, [result.node], parentIdsOf(node)));
   const report = applyRegenerate(tl, node, result);
+  stampGeneration(tl, job, [node.id], gen);
   finishJob(job, 'done');
   commit(tl);
   return { ok: true, updated: { id: node.id, title: node.title }, ...report };
+}
+
+/** What the engine knows about how a result was produced; the rest of Generation is filled in here. */
+type GenerationInfo = Omit<Generation, 'jobType' | 'at' | 'nodesInJob'>;
+
+/** Records on each written node which engine and model wrote it (and, for the built-in engine, the cost). */
+function stampGeneration(tl: Timeline, job: Job, nodeIds: string[], gen?: GenerationInfo) {
+  const info: GenerationInfo = gen ?? {
+    engine: 'external',
+    model: 'Claude Code worker',
+    durationMs: job.claimedAt ? Date.now() - Date.parse(job.claimedAt) : undefined,
+  };
+  for (const id of nodeIds) {
+    const node = tl.nodes[id];
+    if (node) node.generation = { ...info, jobType: job.type, at: now(), ...(nodeIds.length > 1 ? { nodesInJob: nodeIds.length } : {}) };
+  }
 }
 
 /** Marks a job failed. Its placeholder shows the reason and can be retried; a regenerate keeps the old content. */
@@ -705,22 +730,57 @@ if (fs.existsSync(dist)) {
 
 // ---- engine config and the built-in runner ---------------------------------
 
-app.get('/api/engine', h(() => publicConfig()));
+/** Config (never the key), live status, and this month's usage for the Settings page. */
+const engineView = () => ({ ...publicConfig(), status: workerStatus(), usage: { month: monthSummary(), recent: recentUsage(15) } });
+
+app.get('/api/engine', h(() => engineView()));
 
 app.put(
   '/api/engine',
   h((req) => {
-    const body = parse(enginePatch, req.body);
-    updateConfig(body);
-    return publicConfig();
+    updateConfig(parse(enginePatch, req.body));
+    return engineView();
+  }),
+);
+
+/**
+ * The saved built-in settings with unsaved form values on top, so Settings can test before saving.
+ * A missing or empty apiKey keeps the stored one.
+ */
+function draftBuiltin(body: unknown) {
+  const patch = parse(enginePatch, body).builtin ?? {};
+  const { pricing: _pricing, ...rest } = patch;
+  const merged = { ...getConfig().builtin, ...rest };
+  if (!patch.apiKey) merged.apiKey = getConfig().builtin.apiKey;
+  return resolveBuiltin(merged);
+}
+
+app.post(
+  '/api/engine/models',
+  h(async (req) => {
+    try {
+      return { models: await listModels(draftBuiltin(req.body)) };
+    } catch (err) {
+      throw new HttpError(502, (err as Error).message);
+    }
+  }),
+);
+
+app.post(
+  '/api/engine/test',
+  h(async (req) => {
+    const cfg = draftBuiltin(req.body);
+    const problem = builtinProblem(cfg);
+    if (problem) return { ok: false, label: '', ms: 0, detail: problem };
+    return probe(cfg);
   }),
 );
 
 startRunner({
-  submit: (jobId, body) => submitResult(jobId, body),
+  submit: (jobId, body, gen) => submitResult(jobId, body, gen),
   fail: (jobId, reason) => failJob(jobId, reason),
 });
 
-app.listen(PORT, () => {
-  console.log(`[althistory] API on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`[althistory] API on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`);
 });

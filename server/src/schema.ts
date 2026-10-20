@@ -160,8 +160,18 @@ export const enginePatch = z.object({
       maxToolCalls: z.number().int().min(0).max(10).optional(),
       maxRepairs: z.number().int().min(0).max(5).optional(),
       timeoutMs: z.number().int().min(10_000).max(900_000).optional(),
+      /** null clears a price. */
+      pricing: z
+        .object({
+          inputPerMTok: z.number().min(0).nullable().optional(),
+          outputPerMTok: z.number().min(0).nullable().optional(),
+          cachedInputPerMTok: z.number().min(0).nullable().optional(),
+        })
+        .optional(),
     })
     .optional(),
+  /** null clears the cap. */
+  budget: z.object({ monthlyUsd: z.number().min(0).nullable().optional() }).optional(),
 });
 
 export function formatIssues(err: z.ZodError): string {

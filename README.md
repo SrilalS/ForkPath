@@ -46,8 +46,10 @@ does not stop for permission prompts.
 
 ## Engines: Claude Code worker or a model API
 
-Jobs go to exactly one **engine**, set in `data/config.json` (gitignored, may hold an API key; edits apply
-without a restart). The other engine gets `NO_JOB`.
+Jobs go to exactly one **engine**. The easiest way to set it up is the **Settings** page (sidebar): pick the
+engine, choose a preset (Anthropic, OpenAI, Google Gemini, OpenRouter, Ollama, LM Studio), paste a key, load
+the model list, **Test connection**, and save. Settings are stored in `data/config.json` (gitignored, may hold
+an API key; hand edits apply without a restart). The other engine gets `NO_JOB`.
 
 | Engine | What runs the model | Set up |
 |---|---|---|
@@ -77,6 +79,12 @@ without a restart). The other engine gets `NO_JOB`.
 | `maxToolCalls` | 4 | Searches per job |
 | `maxRepairs` | 2 | Invalid results sent back for fixing before the job fails |
 | `timeoutMs` | 300000 | Per request; raise it for slow local models |
+| `pricing` | none | `inputPerMTok`, `outputPerMTok`, `cachedInputPerMTok` in USD per million tokens, from your provider's price page. Without them only tokens are counted |
+| `budget.monthlyUsd` (top level) | none | Monthly spending cap (UTC calendar month). When reached, new jobs wait in the queue; running ones finish |
+
+Every built-in job is logged in `data/usage.json` (tokens, cost, outcome, including failed jobs); Settings shows
+the month's totals and recent jobs. Each generated node records which engine and model wrote it, with tokens,
+cost and time for built-in jobs, shown at the bottom of its side panel.
 
 `GET /api/engine` shows the active config (never the key); `PUT /api/engine` changes it. The built-in runner
 uses the same briefs, validation, follow-ups and writer instructions (`.claude/agents/althistory-writer.md`)
@@ -119,7 +127,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 
 - On startup, older files in `data/timelines/` are upgraded in place. The original is kept as `<id>.v<N>.bak.json`.
 - Imports run the same migrations, so old exports always open.
-- Current version: **v5** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links, v5 added stream renames `streamName`).
+- Current version: **v6** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links, v5 added stream renames `streamName`, v6 added the per-node `generation` record).
 - A file from a newer app version is rejected with a clear message instead of being half-loaded.
 - To change the format: bump `SCHEMA_VERSION` and add a step in `server/src/migrate.ts` keyed by the old version.
 
@@ -140,7 +148,9 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `shared/types.ts` | Types used by both sides |
 | `server/src/runner.ts` | The built-in engine: claims jobs, calls the provider, repairs invalid results |
 | `server/src/llm/` | Provider adapters on plain `fetch`: `anthropic.ts`, `openai.ts` (OpenAI-compatible) |
-| `server/src/config.ts` | Engine config (`data/config.json`) |
+| `server/src/config.ts` | Engine config (`data/config.json`), pricing and budget |
+| `server/src/usage.ts` | Token and cost ledger (`data/usage.json`) |
+| `web/src/components/Settings.tsx` | Settings page: engine, provider, key, test connection, cost, usage |
 | `server/test/` | Contract tests for the adapters (`npm test`) |
 | `worker/WORKER.md` | The dispatcher's instructions: the job loop, one subagent per job, fallback |
 | `.claude/agents/althistory-writer.md` | The writer subagent: writing rules, when to branch, links, JSON shapes |
@@ -153,6 +163,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | Env var | Default | Used by |
 |---|---|---|
 | `ALTHISTORY_API_PORT` | `5174` | backend (also update `web/vite.config.ts` proxy if changed) |
-| `ALTHISTORY_URL` | `http://localhost:5174` | worker scripts |
+| `ALTHISTORY_HOST` | `127.0.0.1` | backend bind address. Loopback only by default, because the API can hold an API key and spend money. Use `0.0.0.0` only on a trusted network |
+| `ALTHISTORY_URL` | `http://127.0.0.1:5174` | worker scripts |
 
 Production-style run: `npm run build` then `npm start`, and open http://localhost:5174.

@@ -4,9 +4,10 @@
 // `submit`), the same follow-ups. Only the transport differs.
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Job } from '../../shared/types.ts';
+import type { Generation, Job } from '../../shared/types.ts';
 import { API_TOOLS, buildBrief } from './brief.ts';
-import { builtinProblem, getConfig, onConfigChange, resolveBuiltin } from './config.ts';
+import { builtinProblem, costUsd, getConfig, onConfigChange, resolveBuiltin } from './config.ts';
+import { monthSummary, recordUsage } from './usage.ts';
 import { claimForBuiltin, getJob, onQueueChange, releaseJob, setBuiltinStatus } from './jobs.ts';
 import { createProvider, LlmError, type ToolSpec, type Usage } from './llm/index.ts';
 import { extractJson } from './llm/json.ts';
@@ -70,7 +71,7 @@ function toolsFor(job: Job): ToolSpec[] {
 /** How the runner hands results to the server: the same functions the worker HTTP routes use. */
 export interface RunnerDeps {
   /** Validates and applies a result. Throws an error with `status` 400 (invalid), 410 (discard) or 409. */
-  submit(jobId: string, body: unknown): { created?: { title: string }[]; updated?: { title: string } };
+  submit(jobId: string, body: unknown, gen: Omit<Generation, 'jobType' | 'at' | 'nodesInJob'>): { created?: { title: string }[]; updated?: { title: string } };
   fail(jobId: string, reason: string): void;
 }
 
@@ -78,20 +79,66 @@ const running = new Map<string, AbortController>();
 /** Set when the provider rejected the key, model or URL: the runner waits for a config change. */
 let paused: string | null = null;
 
+/** Why the monthly budget stops new jobs, or null. Jobs already running finish (and may overshoot it a little). */
+function budgetProblem(): string | null {
+  const cap = getConfig().budget.monthlyUsd;
+  if (cap === undefined) return null;
+  const spent = monthSummary().costUsd;
+  return spent >= cap ? `Monthly budget reached: $${spent.toFixed(2)} of $${cap.toFixed(2)} spent this month` : null;
+}
+
 function publishStatus() {
   const cfg = getConfig();
   const r = resolveBuiltin();
-  const problem = cfg.engine === 'builtin' ? (paused ?? builtinProblem(r)) : null;
+  const problem = cfg.engine === 'builtin' ? (paused ?? builtinProblem(r) ?? budgetProblem()) : null;
   setBuiltinStatus({ ready: cfg.engine === 'builtin' && !problem, label: createProvider(r).label, problem });
 }
 
 const fmtUsage = (u: Usage) =>
   `${u.inputTokens} in (${u.cachedInputTokens} cached) / ${u.outputTokens} out, ${u.requests} request${u.requests === 1 ? '' : 's'}, ${u.toolCalls} tool call${u.toolCalls === 1 ? '' : 's'}`;
 
+type Outcome = 'done' | 'failed' | 'cancelled' | 'released';
+
+/** Runs one job and records its tokens and cost in the usage ledger, whatever the outcome. */
 async function runJob(job: Job, deps: RunnerDeps, controller: AbortController) {
   const r = resolveBuiltin();
+  const provider = createProvider(r);
+  const started = Date.now();
+  const usage = { value: undefined as Usage | undefined };
+  const outcome = await attemptJob(job, deps, controller, r, provider.label, started, usage);
+  const u = usage.value;
+  if (u && u.requests > 0) {
+    recordUsage({
+      at: new Date().toISOString(),
+      jobId: job.id,
+      timelineId: job.timelineId,
+      jobType: job.type,
+      model: provider.label,
+      outcome: outcome === 'released' ? 'cancelled' : outcome,
+      inputTokens: u.inputTokens,
+      outputTokens: u.outputTokens,
+      cachedInputTokens: u.cachedInputTokens,
+      costUsd: costUsd(u),
+      durationMs: Date.now() - started,
+    });
+    publishStatus(); // the budget may now be reached
+  }
+}
+
+async function attemptJob(
+  job: Job,
+  deps: RunnerDeps,
+  controller: AbortController,
+  r: ReturnType<typeof resolveBuiltin>,
+  label: string,
+  started: number,
+  usage: { value: Usage | undefined },
+): Promise<Outcome> {
   const tl = getTimeline(job.timelineId);
-  if (!tl) return deps.fail(job.id, 'Timeline was deleted');
+  if (!tl) {
+    deps.fail(job.id, 'Timeline was deleted');
+    return 'failed';
+  }
   const session = createProvider(r).open({
     system: writerPrompt(),
     tools: toolsFor(job),
@@ -100,7 +147,7 @@ async function runJob(job: Job, deps: RunnerDeps, controller: AbortController) {
     timeoutMs: r.timeoutMs,
     signal: controller.signal,
   });
-  const started = Date.now();
+  usage.value = session.usage;
   const log = (msg: string) => console.log(`[runner] ${job.id} ${job.type}: ${msg}`);
   log('started');
 
@@ -112,23 +159,43 @@ async function runJob(job: Job, deps: RunnerDeps, controller: AbortController) {
   }
 
   for (let attempt = 0; ; attempt++) {
-    if (controller.signal.aborted) return log('cancelled');
+    if (controller.signal.aborted) {
+      log('cancelled');
+      return 'cancelled';
+    }
     let problem: string;
     try {
-      const out = deps.submit(job.id, extractJson(reply));
+      const u = session.usage;
+      const out = deps.submit(job.id, extractJson(reply), {
+        engine: 'builtin',
+        model: label,
+        durationMs: Date.now() - started,
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cachedInputTokens: u.cachedInputTokens,
+        costUsd: costUsd(u),
+        repairs: attempt,
+      });
       const titles = out.created?.map((c) => c.title) ?? (out.updated ? [out.updated.title] : []);
-      log(`✅ ${titles.join(' | ')} (${Math.round((Date.now() - started) / 1000)}s; ${fmtUsage(session.usage)})`);
-      return;
+      log(`✅ ${titles.join(' | ')} (${Math.round((Date.now() - started) / 1000)}s; ${fmtUsage(u)})`);
+      return 'done';
     } catch (err) {
       const status = (err as { status?: number }).status;
-      if (status === 410 || status === 409) return log(`discarded: ${(err as Error).message}`);
-      if (status !== undefined && status !== 400) return deps.fail(job.id, (err as Error).message);
+      if (status === 410 || status === 409) {
+        log(`discarded: ${(err as Error).message}`);
+        return 'cancelled';
+      }
+      if (status !== undefined && status !== 400) {
+        deps.fail(job.id, (err as Error).message);
+        return 'failed';
+      }
       // Unparseable JSON or a 400 from validation: the model gets the same message the worker would.
       problem = status === 400 ? (err as Error).message : `Your reply was not valid JSON (${(err as Error).message}).`;
     }
     if (attempt >= r.maxRepairs) {
       log(`failed after ${attempt} repair${attempt === 1 ? '' : 's'}`);
-      return deps.fail(job.id, `The model's result stayed invalid after ${attempt} repair attempts:\n${problem}`.slice(0, 1000));
+      deps.fail(job.id, `The model's result stayed invalid after ${attempt} repair attempts:\n${problem}`.slice(0, 1000));
+      return 'failed';
     }
     log(`repair ${attempt + 1}: ${problem.split('\n')[0]}`);
     try {
@@ -139,12 +206,16 @@ async function runJob(job: Job, deps: RunnerDeps, controller: AbortController) {
   }
 }
 
-function handleProviderError(err: unknown, job: Job, deps: RunnerDeps, log: (m: string) => void) {
+function handleProviderError(err: unknown, job: Job, deps: RunnerDeps, log: (m: string) => void): Outcome {
   if (!(err instanceof LlmError)) {
     log(`error: ${(err as Error).message}`);
-    return deps.fail(job.id, (err as Error).message);
+    deps.fail(job.id, (err as Error).message);
+    return 'failed';
   }
-  if (err.kind === 'aborted') return log('cancelled');
+  if (err.kind === 'aborted') {
+    log('cancelled');
+    return 'cancelled';
+  }
   if (err.kind === 'config') {
     // Retrying cannot help and every queued job would fail the same way: put this one back and pause.
     paused = `Provider rejected the request: ${err.message}`;
@@ -152,11 +223,12 @@ function handleProviderError(err: unknown, job: Job, deps: RunnerDeps, log: (m: 
     const current = getJob(job.id);
     if (current) releaseJob(current);
     publishStatus();
-    return;
+    return 'released';
   }
-  const hint = err.kind === 'truncated' ? ' Raise maxOutputTokens in data/config.json, or retry.' : '';
+  const hint = err.kind === 'truncated' ? ' Raise maxOutputTokens in Settings, or retry.' : '';
   log(`failed: ${err.message}`);
   deps.fail(job.id, `${err.message}.${hint}`);
+  return 'failed';
 }
 
 /** Starts as many jobs as the config allows. Called whenever the queue or the config changes. */
@@ -167,7 +239,7 @@ function pump(deps: RunnerDeps) {
     if (!job || job.status !== 'claimed' || job.claimedBy !== 'builtin') controller.abort();
   }
   const cfg = getConfig();
-  if (cfg.engine !== 'builtin' || paused || builtinProblem()) return;
+  if (cfg.engine !== 'builtin' || paused || builtinProblem() || budgetProblem()) return;
   while (running.size < cfg.builtin.concurrency) {
     const job = claimForBuiltin();
     if (!job) return;

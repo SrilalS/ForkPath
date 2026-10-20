@@ -30,11 +30,22 @@ const builtinSchema = z.object({
   maxRepairs: z.number().int().min(0).max(5).default(2),
   /** Per request to the provider. */
   timeoutMs: z.number().int().min(10_000).max(900_000).default(300_000),
+  /** USD per million tokens, from the provider's price page. Without them, cost is unknown (tokens still count). */
+  pricing: z
+    .object({
+      inputPerMTok: z.number().min(0).optional(),
+      outputPerMTok: z.number().min(0).optional(),
+      /** Input served from the prompt cache; defaults to the input price. */
+      cachedInputPerMTok: z.number().min(0).optional(),
+    })
+    .default({}),
 });
 
 const configSchema = z.object({
   engine: z.enum(['external', 'builtin']).default('external'),
   builtin: builtinSchema.default(builtinSchema.parse({})),
+  /** Spending cap for the built-in engine, per calendar month (UTC). Needs pricing to mean anything. */
+  budget: z.object({ monthlyUsd: z.number().min(0).optional() }).default({}),
 });
 
 export type BuiltinConfig = z.infer<typeof builtinSchema>;
@@ -72,14 +83,34 @@ function emit() {
   for (const fn of listeners) fn(current);
 }
 
-/** Merges `patch` into the stored config. An apiKey of '' removes the stored key. */
-export function updateConfig(patch: { engine?: AppConfig['engine']; builtin?: Partial<BuiltinConfig> }): AppConfig {
-  const builtin = { ...current.builtin, ...patch.builtin };
+/**
+ * Merges `patch` into the stored config. An apiKey of '' removes the stored key; a pricing or budget field
+ * of null clears it.
+ */
+export function updateConfig(patch: {
+  engine?: AppConfig['engine'];
+  builtin?: Partial<Omit<BuiltinConfig, 'pricing'>> & { pricing?: Record<string, number | null | undefined> };
+  budget?: { monthlyUsd?: number | null };
+}): AppConfig {
+  const pricing = dropNulls({ ...current.builtin.pricing, ...patch.builtin?.pricing });
+  const builtin = { ...current.builtin, ...patch.builtin, pricing };
   if (builtin.apiKey === '') delete builtin.apiKey;
-  current = configSchema.parse({ engine: patch.engine ?? current.engine, builtin });
+  const budget = dropNulls({ ...current.budget, ...patch.budget });
+  current = configSchema.parse({ engine: patch.engine ?? current.engine, builtin, budget });
   writeJsonAtomic(CONFIG_FILE, current);
   emit();
   return current;
+}
+
+const dropNulls = <T extends Record<string, unknown>>(o: T) =>
+  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined)) as { [K in keyof T]: Exclude<T[K], null> };
+
+/** Cost of a job in USD, or undefined when no prices are configured. */
+export function costUsd(u: { inputTokens: number; outputTokens: number; cachedInputTokens: number }, p = current.builtin.pricing) {
+  if (p.inputPerMTok === undefined && p.outputPerMTok === undefined) return undefined;
+  const input = p.inputPerMTok ?? 0;
+  const cached = p.cachedInputPerMTok ?? input;
+  return ((u.inputTokens - u.cachedInputTokens) * input + u.cachedInputTokens * cached + u.outputTokens * (p.outputPerMTok ?? 0)) / 1e6;
 }
 
 // Hand edits to the file apply live. unref: the watcher alone never keeps the process running.
@@ -126,7 +157,10 @@ export function publicConfig() {
       maxOutputTokens: r.maxOutputTokens,
       maxToolCalls: r.maxToolCalls,
       maxRepairs: r.maxRepairs,
+      timeoutMs: r.timeoutMs,
+      pricing: r.pricing,
     },
+    budget: current.budget,
     problem: current.engine === 'builtin' ? builtinProblem(r) : null,
   };
 }

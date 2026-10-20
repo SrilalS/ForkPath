@@ -26,6 +26,8 @@ const steps: Record<number, (tl: Raw) => Raw> = {
   },
   // v4 -> v5: optional node streamName (a stream rename). Nothing to fill in.
   4: (tl) => tl,
+  // v5 -> v6: optional node generation record. Older nodes simply have none.
+  5: (tl) => tl,
 };
 
 export class MigrationError extends Error {}
@@ -76,6 +78,9 @@ function sanitize(tl: Raw) {
       const name = typeof n.threadName === 'string' ? n.threadName.trim().slice(0, 80) : '';
       if (name && n.parentId) n.threadName = name;
       else delete n.threadName;
+    }
+    if (n.generation !== undefined && (typeof n.generation !== 'object' || typeof n.generation?.model !== 'string')) {
+      delete n.generation;
     }
     if (n.streamName !== undefined) {
       const name = typeof n.streamName === 'string' ? n.streamName.trim().slice(0, 80) : '';

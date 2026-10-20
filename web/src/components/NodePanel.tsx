@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Timeline, TLNode } from '../../../shared/types.ts';
+import type { Generation, Timeline, TLNode } from '../../../shared/types.ts';
 import { api, type GenerateOptions } from '../api.ts';
 import { GenerateOptionsFields } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
@@ -327,6 +327,8 @@ export function NodePanel({
                 </button>
               ))}
             </section>
+
+            {node.generation && <GenerationLine g={node.generation} edited={node.source === 'llm-edited'} />}
           </>
         )}
       </div>
@@ -503,6 +505,26 @@ function ContinueForm({
         </button>
       </div>
     </form>
+  );
+}
+
+const tokens = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** Which engine and model wrote this node, and for the built-in engine what it cost. */
+function GenerationLine({ g, edited }: { g: Generation; edited: boolean }) {
+  const parts = [
+    g.model,
+    g.inputTokens !== undefined && `${tokens(g.inputTokens)} in / ${tokens(g.outputTokens ?? 0)} out`,
+    g.costUsd !== undefined && (g.costUsd > 0 && g.costUsd < 0.01 ? '<$0.01' : `$${g.costUsd.toFixed(2)}`),
+    g.durationMs !== undefined && `${Math.round(g.durationMs / 1000)}s`,
+    g.repairs ? `${g.repairs} repair${g.repairs > 1 ? 's' : ''}` : null,
+    g.nodesInJob ? `shared by ${g.nodesInJob} nodes` : null,
+  ].filter(Boolean);
+  return (
+    <p className="panel__generation muted small" title={`Generated ${new Date(g.at).toLocaleString()} (${g.jobType})`}>
+      ✍️ {parts.join(' · ')}
+      {edited && ' · edited since'}
+    </p>
   );
 }
 

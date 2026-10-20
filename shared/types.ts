@@ -8,8 +8,9 @@
  *   3: adds node mergeParents (convergence of separate branches)
  *   4: adds parallel threads (node threadName) and timeline influence links
  *   5: adds node streamName (renames a stream from that node onward)
+ *   6: adds node generation (which engine and model wrote it, tokens, cost)
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export type NodeKind = 'deviation' | 'event';
 export type NodeSource = 'user' | 'llm' | 'llm-edited';
@@ -70,9 +71,30 @@ export interface TLNode {
   branchReason?: string;
   /** Job currently producing content for this node (status === 'generating'). */
   jobId?: string;
+  /** How the current content was generated (absent on user-written nodes and older files). */
+  generation?: Generation;
   error?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Which engine and model wrote a node. Token and cost fields are only known for the built-in engine. */
+export interface Generation {
+  engine: 'external' | 'builtin';
+  /** e.g. "claude-sonnet-4-6 via Anthropic", or "Claude Code worker". */
+  model: string;
+  jobType: JobType;
+  at: string;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  /** Whole job's cost in USD, when prices are configured. */
+  costUsd?: number;
+  /** Invalid results the model had to fix. */
+  repairs?: number;
+  /** Nodes written by the same job; tokens and cost are for the whole job, shared by all of them. */
+  nodesInJob?: number;
 }
 
 export const STRENGTHS = ['mild', 'moderate', 'strong'] as const;

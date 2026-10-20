@@ -19,6 +19,7 @@ import { InfluenceEdge } from './components/InfluenceEdge.tsx';
 import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/NodePanel.tsx';
 import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
 import { AboutPage, GuidePage } from './components/Pages.tsx';
+import { SettingsPage } from './components/Settings.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
 import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, streamLabel } from './graph.ts';
 
@@ -57,8 +58,8 @@ function useLayoutMode(timelineId: string | null): [LayoutMode, (m: LayoutMode) 
 }
 
 /** Static pages, routed as #/guide and #/about (timeline ids never collide: they are hex). */
-type Page = 'guide' | 'about';
-const PAGES: Page[] = ['guide', 'about'];
+type Page = 'guide' | 'about' | 'settings';
+const PAGES: Page[] = ['guide', 'about', 'settings'];
 
 function readHash(): { tl: string | null; node: string | null; page: Page | null } {
   const [tl, node] = window.location.hash.replace(/^#\/?/, '').split('/');
@@ -251,6 +252,8 @@ export default function App() {
       <main className="main">
         {route.page === 'guide' ? (
           <GuidePage />
+        ) : route.page === 'settings' ? (
+          <SettingsPage worker={worker} onError={toast} />
         ) : route.page === 'about' ? (
           <AboutPage />
         ) : route.tl && timeline ? (
@@ -662,6 +665,7 @@ const ICONS = {
   import: 'M12 15V4M7.5 8.5 12 4l4.5 4.5M5 14v5h14v-5',
   guide: 'M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5c-.8 0-1.5-.7-1.5-1.5zM20 5.5c0-.8-.7-1.5-1.5-1.5H13v16h5.5c.8 0 1.5-.7 1.5-1.5z',
   about: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 7.5v.5',
+  settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
   collapse: 'M15 6l-6 6 6 6',
   expand: 'M9 6l6 6-6 6',
 } as const;
@@ -729,6 +733,7 @@ function Sidebar({
       {(
         [
           ['guide', 'Guide'],
+          ['settings', 'Settings'],
           ['about', 'About'],
         ] as const
       ).map(([p, label]) => (

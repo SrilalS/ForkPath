@@ -1,4 +1,4 @@
-import type { InfluenceLink, Strength, Timeline, TimelineSummary, TLNode } from '../../shared/types.ts';
+import type { InfluenceLink, Strength, Timeline, TimelineSummary, TLNode, WorkerStatus } from '../../shared/types.ts';
 
 export interface DeviationInput {
   title: string;
@@ -27,6 +27,75 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `${res.status} ${res.statusText}`);
   return data as T;
+}
+
+export type EngineId = 'external' | 'builtin';
+export type ProviderId = 'anthropic' | 'openai-compatible';
+
+export interface Pricing {
+  inputPerMTok?: number;
+  outputPerMTok?: number;
+  cachedInputPerMTok?: number;
+}
+
+/** Built-in engine settings as the server shows them: never the key itself. */
+export interface BuiltinView {
+  provider: ProviderId;
+  model: string;
+  baseUrl: string;
+  hasKey: boolean;
+  /** 'config', 'env:NAME' or 'none'. */
+  keySource: string;
+  concurrency: number;
+  maxOutputTokens: number;
+  maxToolCalls: number;
+  maxRepairs: number;
+  timeoutMs: number;
+  pricing: Pricing;
+}
+
+export interface UsageEntry {
+  at: string;
+  jobId: string;
+  jobType: string;
+  model: string;
+  outcome: 'done' | 'failed' | 'cancelled';
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  costUsd?: number;
+  durationMs: number;
+}
+
+export interface EngineView {
+  engine: EngineId;
+  builtin: BuiltinView;
+  budget: { monthlyUsd?: number };
+  problem: string | null;
+  status: WorkerStatus;
+  usage: {
+    month: { month: string; jobs: number; failed: number; inputTokens: number; outputTokens: number; cachedInputTokens: number; costUsd: number; unpriced: number };
+    recent: UsageEntry[];
+  };
+}
+
+/** What Settings sends: only changed fields matter. apiKey '' removes the stored key; null clears a price or cap. */
+export interface EnginePatch {
+  engine?: EngineId;
+  builtin?: Partial<Omit<BuiltinView, 'hasKey' | 'keySource' | 'pricing'>> & {
+    apiKey?: string;
+    pricing?: { [K in keyof Pricing]?: number | null };
+  };
+  budget?: { monthlyUsd?: number | null };
+}
+
+export interface ProbeResult {
+  ok: boolean;
+  label: string;
+  ms: number;
+  detail: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 const node = (tl: string, id: string, action = '') => `/api/timelines/${tl}/nodes/${id}${action ? `/${action}` : ''}`;
@@ -59,4 +128,10 @@ export const api = {
   cancel: (tl: string, id: string) => req('POST', node(tl, id, 'cancel'), {}),
   retry: (tl: string, id: string) => req<TLNode>('POST', node(tl, id, 'retry'), {}),
   deleteNode: (tl: string, id: string) => req('DELETE', node(tl, id)),
+
+  getEngine: () => req<EngineView>('GET', '/api/engine'),
+  saveEngine: (patch: EnginePatch) => req<EngineView>('PUT', '/api/engine', patch),
+  /** Runs one tiny request with the given (unsaved) settings on top of the saved ones. */
+  testEngine: (patch: EnginePatch) => req<ProbeResult>('POST', '/api/engine/test', patch),
+  listModels: (patch: EnginePatch) => req<{ models: string[] }>('POST', '/api/engine/models', patch),
 };
