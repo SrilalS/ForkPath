@@ -6,10 +6,10 @@ import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 export interface CanvasActions {
   quickContinue: (nodeId: string) => void;
   workerOnline: boolean;
-  /** Set while the user is picking a second node to converge with. */
-  merge: { sourceId: string; targets: Set<string> } | null;
+  /** Set while the user is picking a second node (to merge with, or to influence). */
+  pick: { kind: 'merge' | 'link'; sourceId: string; targets: Set<string>; selected: Set<string> } | null;
 }
-export const CanvasActionsContext = createContext<CanvasActions>({ quickContinue: () => {}, workerOnline: false, merge: null });
+export const CanvasActionsContext = createContext<CanvasActions>({ quickContinue: () => {}, workerOnline: false, pick: null });
 
 function kindLabel(isRoot: boolean, node: { kind: string; mergeParents?: string[] }) {
   if (isRoot) return 'Point of divergence';
@@ -18,8 +18,8 @@ function kindLabel(isRoot: boolean, node: { kind: string; mergeParents?: string[
 }
 
 function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
-  const { node, isRoot } = data;
-  const { quickContinue, workerOnline, merge } = useContext(CanvasActionsContext);
+  const { node, isRoot, thread } = data;
+  const { quickContinue, workerOnline, pick } = useContext(CanvasActionsContext);
   const generating = node.status === 'generating';
   const errored = node.status === 'error';
 
@@ -35,17 +35,31 @@ function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
     generating && 'is-generating',
     errored && 'is-error',
     node.stale && 'is-stale',
-    merge && (merge.sourceId === node.id ? 'is-merge-source' : merge.targets.has(node.id) ? 'is-merge-target' : 'is-merge-blocked'),
+    thread && 'in-thread',
+    pick && `pick-${pick.kind}`,
+    pick &&
+      (pick.sourceId === node.id || pick.selected.has(node.id)
+        ? 'is-pick-source'
+        : pick.targets.has(node.id)
+          ? 'is-pick-target'
+          : 'is-pick-blocked'),
   ]
     .filter(Boolean)
     .join(' ');
 
   return (
-    <div className={cls} style={major ? ({ '--tone': tone.color } as React.CSSProperties) : undefined}>
+    <div
+      className={cls}
+      style={{ ...(major ? { '--tone': tone.color } : {}), ...(thread ? { '--thread': thread.color } : {}) } as React.CSSProperties}
+    >
       <Handle type="target" position={Position.Left} className="tl-handle" isConnectable={false} />
 
       <div className="tl-node__head">
-        {major ? (
+        {thread?.isStart && !major ? (
+          <span className="tl-chip tl-chip--thread" title="Starts a parallel thread: happens alongside, not instead">
+            🧵 New thread
+          </span>
+        ) : major ? (
           <span className="tl-chip tl-chip--tone" title={tone.label}>
             {tone.icon} {SIGNIFICANCE_LABEL[node.significance]}
           </span>
@@ -86,16 +100,21 @@ function TimelineNodeView({ data, selected }: NodeProps<FlowNode>) {
             {Math.round(node.likelihood * 100)}%
           </span>
         )}
+        {thread && (
+          <span className="tl-thread" title={`Thread: ${thread.name}`}>
+            {thread.name}
+          </span>
+        )}
         {node.stale && <span className="tl-badge tl-badge--stale">Stale</span>}
         {node.source === 'llm-edited' && <span className="tl-badge">Edited</span>}
         {node.error && !errored && <span className="tl-badge tl-badge--error">Last regen failed</span>}
       </div>
 
       <Handle type="source" position={Position.Right} className="tl-handle" isConnectable={false} />
-      {node.status === 'ready' && !merge && (
+      {node.status === 'ready' && !pick && (
         <button
           className="tl-node__plus nodrag"
-          title="Continue from here"
+          title="Continue from here (choose span and guidance first)"
           onClick={(e) => {
             e.stopPropagation();
             quickContinue(node.id);

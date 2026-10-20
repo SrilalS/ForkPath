@@ -52,7 +52,9 @@ does not stop for permission prompts.
 | ✏️ Edit | **Edit** a node. Every node after it gets marked **Stale** |
 | ♻️ Stale nodes | **Regenerate** (model rewrites it to fit), **Keep**, or **Keep whole branch** |
 
-| ⤚⤙ Merge | **Merge with...** on a node, then click a highlighted node on a separate branch. The model writes where the two storylines meet (same world, Branch A wins conflicts unless your guidance says otherwise) |
+| 🧵 Threads | A **parallel thread** is a separate storyline in the same world (not an alternative). The LLM spawns one when an event sets off a related stream worth tracking on its own; you can start one with **Branch here** then **Parallel thread** |
+| ⇢ Influences | Dotted orange arrows: "this event shapes that one" across threads (mild / moderate / strong). The LLM adds them; you add them with **Influences...** and remove them in the side panel. Links are only allowed within one world, and editing a node marks the nodes it influences stale |
+| ⤚⤙ Merge | **Merge with...** on a node, click 1-4 highlighted nodes on separate branches, then **Merge N** in the banner. The model writes where the two storylines meet (same world, Branch A wins conflicts unless your guidance says otherwise) |
 | ◷ Align by time | Top-bar toggle. Columns are ordered by each node's start date (parsed from its period), so events in different branches line up. Undated nodes sit just after their parent. Remembered per timeline |
 | ↔️ Panel width | Drag the side panel's left edge; double-click it to reset. The width is remembered |
 | 💾 Save branch | **Save branch** in the side panel downloads the path to that node plus everything after it. **Export** in the top bar downloads the whole timeline |
@@ -73,7 +75,7 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 
 - On startup, older files in `data/timelines/` are upgraded in place. The original is kept as `<id>.v<N>.bak.json`.
 - Imports run the same migrations, so old exports always open.
-- Current version: **v3** (v2 added significance/tone, v3 added convergence `mergeParents`).
+- Current version: **v4** (v2 added significance/tone, v3 added convergence `mergeParents`, v4 added threads and influence links).
 - A file from a newer app version is rejected with a clear message instead of being half-loaded.
 - To change the format: bump `SCHEMA_VERSION` and add a step in `server/src/migrate.ts` keyed by the old version.
 
@@ -85,6 +87,8 @@ Timelines and exported files carry a `schemaVersion` (`SCHEMA_VERSION` in `share
 | `server/src/jobs.ts` | Job queue, long polling, worker presence, claim timeout (20 min) |
 | `server/src/brief.ts` | Turns a job into the markdown brief the worker reads |
 | `server/src/schema.ts` | Zod validation of worker results and user input |
+| `shared/world.ts` | Threads vs alternatives, which nodes share a world, which influence links are valid |
+| `server/src/apply.ts` | Applies worker results (threads, links) and stale propagation |
 | `server/src/migrate.ts` | Schema version upgrades for stored and imported timelines |
 | `server/src/transfer.ts` | Export (timeline or branch) and import |
 | `web/src/mood.ts` | Tone colors and the mood-theme rules |

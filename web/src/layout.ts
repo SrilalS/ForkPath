@@ -1,9 +1,9 @@
 import { Graph, layout } from '@dagrejs/dagre';
-import { Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
+import { MarkerType, Position, type Edge, type Node, type NodeHandle } from '@xyflow/react';
 import type { Timeline, TLNode } from '../../shared/types.ts';
 import { isMajor, TONE_STYLE } from './mood.ts';
-import { parentIdsOf } from './graph.ts';
-import { formatYear, parsePeriodStart } from './time.ts';
+import { parentIdsOf, threadColors, threadLabel, threadRootOf } from './graph.ts';
+import { formatYear, parsePeriodStart } from '../../shared/time.ts';
 
 export const NODE_W = 300;
 export const NODE_H = 168;
@@ -15,7 +15,13 @@ const HANDLES: NodeHandle[] = [
   { type: 'source', position: Position.Right, x: NODE_W - HANDLE / 2, y: NODE_H / 2 - HANDLE / 2, width: HANDLE, height: HANDLE },
 ];
 
-export type FlowNodeData = { node: TLNode; isRoot: boolean; childCount: number };
+export type FlowNodeData = {
+  node: TLNode;
+  isRoot: boolean;
+  childCount: number;
+  /** Side thread this node belongs to (undefined on the main thread). */
+  thread?: { name: string; color: string; isStart: boolean };
+};
 export type FlowNode = Node<FlowNodeData, 'timeline'>;
 
 /** 'structure': compact tree by generation. 'time': columns ordered by date, so branches line up. */
@@ -80,6 +86,13 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
   }
   layout(g);
 
+  const colors = threadColors(tl);
+  const threadOf = (n: TLNode): FlowNodeData['thread'] => {
+    const root = threadRootOf(tl, n.id);
+    const color = colors.get(root);
+    return color ? { name: threadLabel(tl, root), color, isStart: root === n.id } : undefined;
+  };
+
   const childCount = new Map<string, number>();
   for (const n of all) if (n.parentId) childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
 
@@ -142,7 +155,7 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
       initialWidth: NODE_W,
       initialHeight: NODE_H,
       handles: HANDLES,
-      data: { node: n, isRoot: n.id === tl.rootId, childCount: childCount.get(n.id) ?? 0 },
+      data: { node: n, isRoot: n.id === tl.rootId, childCount: childCount.get(n.id) ?? 0, thread: threadOf(n) },
       draggable: false,
     };
   });
@@ -158,9 +171,11 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
       ];
       const major = isMajor(n) && n.status === 'ready';
       if (major) cls.push('tl-edge--major');
+      if (n.threadName) cls.push('tl-edge--thread');
+      const edgeColor = n.threadName ? colors.get(n.id) : major ? TONE_STYLE[n.tone].color : undefined;
       return {
         id: `${n.parentId}-${n.id}`,
-        style: major ? ({ '--edge-color': TONE_STYLE[n.tone].color } as React.CSSProperties) : undefined,
+        style: edgeColor ? ({ '--edge-color': edgeColor } as React.CSSProperties) : undefined,
         source: n.parentId!,
         target: n.id,
         type: 'default',
@@ -186,6 +201,21 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
         className: ['tl-edge', 'tl-edge--merge', n.stale ? 'tl-edge--stale' : ''].filter(Boolean).join(' '),
       });
     }
+  }
+
+  // Influence links: drawn, but never used for layout (they are context, not parentage).
+  for (const l of tl.links ?? []) {
+    if (!tl.nodes[l.from] || !tl.nodes[l.to]) continue;
+    edges.push({
+      id: `link-${l.id}`,
+      source: l.from,
+      target: l.to,
+      type: 'influence', // floating edge, see components/InfluenceEdge.tsx
+      data: { strength: l.strength, note: l.note },
+      className: `tl-edge tl-edge--influence tl-edge--${l.strength}`,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: 'var(--influence)' },
+      zIndex: 1,
+    });
   }
 
   return { nodes, edges, axis };

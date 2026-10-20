@@ -45,6 +45,7 @@ export function buildExport(tl: Timeline, branchNodeId?: string): ExportFile {
       ...tl,
       title: branchNode && branchNode.id !== tl.rootId ? `${tl.title}: ${branchNode.title}` : tl.title,
       nodes,
+      links: tl.links.filter((l) => nodes[l.from] && nodes[l.to]),
     },
   };
 }
@@ -90,11 +91,14 @@ export function importFile(raw: unknown): Timeline {
     if (!mergeParents.length) delete nodes[id].mergeParents;
   }
   const rootId = idMap.get(timeline.rootId)!;
+  const links = timeline.links
+    .filter((l) => nodes[idMap.get(l.from) ?? ''] && nodes[idMap.get(l.to) ?? ''])
+    .map((l) => ({ ...l, id: newId(), from: idMap.get(l.from)!, to: idMap.get(l.to)! }));
 
   const taken = new Set(listTimelines().map((t) => t.title));
   let title = timeline.title || 'Imported timeline';
   if (taken.has(title)) title = `${title} (imported)`;
 
   const ts = now();
-  return { ...timeline, schemaVersion: SCHEMA_VERSION, id: newId(), title, rootId, nodes, createdAt: ts, updatedAt: ts };
+  return { ...timeline, schemaVersion: SCHEMA_VERSION, id: newId(), title, rootId, nodes, links, createdAt: ts, updatedAt: ts };
 }

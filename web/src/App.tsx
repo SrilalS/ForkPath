@@ -7,6 +7,7 @@ import {
   ReactFlow,
   useReactFlow,
   ViewportPortal,
+  type EdgeTypes,
   type NodeTypes,
 } from '@xyflow/react';
 import type { Timeline, TimelineSummary, WorkerStatus } from '../../shared/types.ts';
@@ -14,13 +15,17 @@ import { api } from './api.ts';
 import { useLive } from './live.ts';
 import { NODE_H, NODE_W, toFlow, type FlowNode, type LayoutMode, type TimeAxis } from './layout.ts';
 import { CanvasActionsContext, TimelineNode, type CanvasActions } from './components/TimelineNode.tsx';
+import { InfluenceEdge } from './components/InfluenceEdge.tsx';
 import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/NodePanel.tsx';
-import { DeviationDialog, MergeDialog } from './components/forms.tsx';
+import { DeviationDialog, LinkDialog, MergeDialog } from './components/forms.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
-import { mergeTargets } from './graph.ts';
+import { canLink, linkTargets, mergeTargets } from './graph.ts';
 
 const nodeTypes: NodeTypes = { timeline: TimelineNode };
+const edgeTypes: EdgeTypes = { influence: InfluenceEdge };
 const PANEL_WIDTH_KEY = 'althistory.panelWidth';
+/** Matches the server: one node plus up to this many others per merge. */
+const MAX_MERGE_WITH = 4;
 const layoutKey = (timelineId: string) => `althistory.layout.${timelineId}`;
 
 /** Layout choice per timeline, remembered in this browser. Defaults to the compact tree. */
@@ -65,12 +70,18 @@ export default function App() {
   const [route, setRoute] = useState(readHash);
   const { connected, timelines, worker, timeline, loaded } = useLive(route.tl);
   const [dialog, setDialog] = useState<
-    { kind: 'new' } | { kind: 'branch'; nodeId: string } | { kind: 'merge'; a: string; b: string } | null
+    | { kind: 'new' }
+    | { kind: 'branch'; nodeId: string }
+    | { kind: 'merge'; a: string; others: string[] }
+    | { kind: 'link'; from: string; to: string }
+    | null
   >(null);
   const [toasts, setToasts] = useState<{ id: number; msg: string }[]>([]);
   const [layoutMode, setLayoutMode] = useLayoutMode(route.tl);
-  /** Node waiting for a second pick on the canvas to converge with. */
-  const [mergeSource, setMergeSource] = useState<string | null>(null);
+  /** Node waiting for a second pick on the canvas: to converge with, or to influence. */
+  const [pickSource, setPickSource] = useState<{ kind: 'merge' | 'link'; id: string; selected?: string[] } | null>(null);
+  /** Set by a node's + button: open the side panel on that node with the Continue form showing. */
+  const [continueRequest, setContinueRequest] = useState<{ id: string; at: number } | null>(null);
   const [panelWidth, setPanelWidth] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
@@ -116,32 +127,55 @@ export default function App() {
   const selected = timeline && route.node ? timeline.nodes[route.node] : undefined;
   const workerOnline = worker?.online ?? false;
 
-  const merge = useMemo(
-    () => (timeline && mergeSource && timeline.nodes[mergeSource] ? { sourceId: mergeSource, targets: mergeTargets(timeline, mergeSource) } : null),
-    [timeline, mergeSource],
-  );
-  // Leaving the timeline (or the source vanishing) ends merge mode.
+  const pick = useMemo<CanvasActions['pick']>(() => {
+    if (!timeline || !pickSource || !timeline.nodes[pickSource.id]) return null;
+    // Nodes deleted while picking drop out of the selection.
+    const chosen = (pickSource.selected ?? []).filter((id) => timeline.nodes[id]);
+    const targets =
+      pickSource.kind === 'merge' ? mergeTargets(timeline, pickSource.id, chosen) : linkTargets(timeline, pickSource.id);
+    return { kind: pickSource.kind, sourceId: pickSource.id, targets, selected: new Set(chosen) };
+  }, [timeline, pickSource]);
+  // Leaving the timeline (or the source vanishing) ends pick mode.
   useEffect(() => {
-    if (mergeSource && !merge) setMergeSource(null);
-  }, [mergeSource, merge]);
+    if (pickSource && !pick) setPickSource(null);
+  }, [pickSource, pick]);
   useEffect(() => {
-    if (!merge) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMergeSource(null);
+    if (!pick) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPickSource(null);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [merge]);
+  }, [pick]);
 
-  const pickMergeTarget = useCallback(
+  const pickTarget = useCallback(
     (id: string) => {
-      if (!merge) return;
-      if (id === merge.sourceId) return;
-      if (!merge.targets.has(id)) {
-        toast('Pick a node on a separate branch. Nodes before or after this one are on the same path.');
+      if (!pick || !timeline) return;
+      if (id === pick.sourceId) return;
+      if (!pick.targets.has(id)) {
+        if (pick.kind === 'merge') {
+          toast('Pick a node on a separate branch from all the selected ones. Nodes before or after them are on the same path.');
+        } else {
+          const check = canLink(timeline, pick.sourceId, id);
+          toast(`Cannot link: ${check.ok ? 'not available' : check.reason}.`);
+        }
         return;
       }
-      setDialog({ kind: 'merge', a: merge.sourceId, b: id });
+      if (pick.kind === 'link') {
+        setDialog({ kind: 'link', from: pick.sourceId, to: id });
+        return;
+      }
+      // Merge: clicks toggle nodes in and out of the selection; the banner's Merge button confirms.
+      setPickSource((cur) => {
+        if (!cur) return cur;
+        const sel = cur.selected ?? [];
+        if (sel.includes(id)) return { ...cur, selected: sel.filter((x) => x !== id) };
+        if (sel.length >= MAX_MERGE_WITH) {
+          toast(`Merge at most ${MAX_MERGE_WITH + 1} storylines at once.`);
+          return cur;
+        }
+        return { ...cur, selected: [...sel, id] };
+      });
     },
-    [merge, toast],
+    [pick, timeline, toast],
   );
   const mood = moodFor(timeline, selected);
   const moodVars = { '--mood': mood.color, '--mood-strength': mood.strength } as React.CSSProperties;
@@ -185,8 +219,12 @@ export default function App() {
               workerOnline={workerOnline}
               panelWidth={selected ? panelWidth : 0}
               layoutMode={layoutMode}
-              merge={merge}
-              onMergePick={pickMergeTarget}
+              pick={pick}
+              onPick={pickTarget}
+              onRequestContinue={(id) => {
+                selectNode(id);
+                setContinueRequest({ id, at: Date.now() });
+              }}
               onSelect={selectNode}
               onError={toast}
             />
@@ -198,13 +236,33 @@ export default function App() {
               onSelect={selectNode}
               onError={toast}
             />
-            {merge && (
-              <div className="merge-banner">
-                <span>
-                  ⤚⤙ Pick the node to merge with <strong>{timeline.nodes[merge.sourceId].title}</strong>
-                </span>
-                <span className="muted small">Highlighted nodes are on separate branches</span>
-                <button className="btn btn--small" onClick={() => setMergeSource(null)}>
+            {pick && (
+              <div className={`merge-banner merge-banner--${pick.kind}`}>
+                {pick.kind === 'merge' ? (
+                  <>
+                    <span>
+                      ⤚⤙ Pick the storylines to merge with <strong>{timeline.nodes[pick.sourceId].title}</strong>
+                    </span>
+                    <span className="muted small">
+                      {pick.selected.size ? `${pick.selected.size} selected · click again to remove` : 'Click one or more highlighted nodes'}
+                    </span>
+                    <button
+                      className="btn btn--small btn--primary"
+                      disabled={!pick.selected.size}
+                      onClick={() => setDialog({ kind: 'merge', a: pick.sourceId, others: [...pick.selected] })}
+                    >
+                      Merge {pick.selected.size + 1}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span>
+                      ⇢ Pick the node that <strong>{timeline.nodes[pick.sourceId].title}</strong> influences
+                    </span>
+                    <span className="muted small">Highlighted nodes are in the same world</span>
+                  </>
+                )}
+                <button className="btn btn--small" onClick={() => setPickSource(null)}>
                   Cancel
                 </button>
               </div>
@@ -216,11 +274,13 @@ export default function App() {
                 node={selected}
                 workerOnline={workerOnline}
                 width={panelWidth}
-                mergePicking={!!merge}
+                picking={!!pick}
                 onResize={resizePanel}
                 onSelect={selectNode}
                 onBranch={(nodeId) => setDialog({ kind: 'branch', nodeId })}
-                onStartMerge={setMergeSource}
+                onStartMerge={(id) => setPickSource({ kind: 'merge', id })}
+                onStartLink={(id) => setPickSource({ kind: 'link', id })}
+                continueRequest={continueRequest}
                 onError={toast}
               />
             )}
@@ -253,9 +313,10 @@ export default function App() {
       )}
       {dialog?.kind === 'branch' && timeline && (
         <DeviationDialog
-          title="Branch with a new deviation"
-          subtitle={`Something changes after "${timeline.nodes[dialog.nodeId]?.title}". The existing path stays untouched.`}
+          title="Branch from here"
+          subtitle={`Something new starts after "${timeline.nodes[dialog.nodeId]?.title}". The existing path stays untouched.`}
           submitLabel="Create branch"
+          allowThread
           onClose={() => setDialog(null)}
           onSubmit={async (d, auto, opts) => {
             const dev = await api.branch(timeline.id, dialog.nodeId, d, auto, opts);
@@ -264,15 +325,26 @@ export default function App() {
         />
       )}
 
-      {dialog?.kind === 'merge' && timeline && timeline.nodes[dialog.a] && timeline.nodes[dialog.b] && (
+      {dialog?.kind === 'merge' && timeline && [dialog.a, ...dialog.others].every((id) => timeline.nodes[id]) && (
         <MergeDialog
-          a={timeline.nodes[dialog.a]}
-          b={timeline.nodes[dialog.b]}
+          nodes={[dialog.a, ...dialog.others].map((id) => timeline.nodes[id])}
           onClose={() => setDialog(null)}
           onSubmit={async (opts) => {
-            const node = await api.merge(timeline.id, dialog.a, dialog.b, opts);
-            setMergeSource(null);
+            const node = await api.merge(timeline.id, dialog.a, dialog.others, opts);
+            setPickSource(null);
             selectNode(node.id);
+          }}
+        />
+      )}
+
+      {dialog?.kind === 'link' && timeline && timeline.nodes[dialog.from] && timeline.nodes[dialog.to] && (
+        <LinkDialog
+          from={timeline.nodes[dialog.from]}
+          to={timeline.nodes[dialog.to]}
+          onClose={() => setDialog(null)}
+          onSubmit={async (strength, note) => {
+            await api.addLink(timeline.id, dialog.from, dialog.to, strength, note);
+            setPickSource(null);
           }}
         />
       )}
@@ -296,8 +368,9 @@ function Canvas({
   workerOnline,
   panelWidth,
   layoutMode,
-  merge,
-  onMergePick,
+  pick,
+  onPick,
+  onRequestContinue,
   onSelect,
   onError,
 }: {
@@ -307,8 +380,9 @@ function Canvas({
   /** Width of the side panel covering the right of the canvas (0 when closed). */
   panelWidth: number;
   layoutMode: LayoutMode;
-  merge: CanvasActions['merge'];
-  onMergePick: (id: string) => void;
+  pick: CanvasActions['pick'];
+  onPick: (id: string) => void;
+  onRequestContinue: (id: string) => void;
   onSelect: (id: string | null) => void;
   onError: (msg: string) => void;
 }) {
@@ -359,17 +433,11 @@ function Canvas({
   const actions = useMemo<CanvasActions>(
     () => ({
       workerOnline,
-      merge,
-      quickContinue: async (nodeId: string) => {
-        try {
-          const p = await api.continueFrom(timeline.id, nodeId, {});
-          onSelect(p.id);
-        } catch (err) {
-          onError((err as Error).message);
-        }
-      },
+      pick,
+      // Opens the Continue form for that node; nothing is generated until the user submits it.
+      quickContinue: onRequestContinue,
     }),
-    [timeline.id, workerOnline, merge, onSelect, onError],
+    [workerOnline, pick, onRequestContinue],
   );
 
   return (
@@ -378,8 +446,9 @@ function Canvas({
         nodes={withSelection}
         edges={edges}
         nodeTypes={nodeTypes}
-        onNodeClick={(_, n) => (merge ? onMergePick(n.id) : onSelect(n.id))}
-        onPaneClick={() => !merge && onSelect(null)}
+        edgeTypes={edgeTypes}
+        onNodeClick={(_, n) => (pick ? onPick(n.id) : onSelect(n.id))}
+        onPaneClick={() => !pick && onSelect(null)}
         nodesConnectable={false}
         elementsSelectable
         minZoom={0.15}

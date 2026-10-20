@@ -1,10 +1,12 @@
-import type { Timeline, TimelineSummary, TLNode } from '../../shared/types.ts';
+import type { InfluenceLink, Strength, Timeline, TimelineSummary, TLNode } from '../../shared/types.ts';
 
 export interface DeviationInput {
   title: string;
   period: string;
   summary: string;
   narrative?: string;
+  /** Set to start a parallel thread (happens alongside) instead of an alternative. */
+  threadName?: string;
 }
 
 export interface GenerateOptions {
@@ -41,8 +43,11 @@ export const api = {
   importFile: (data: unknown) => req<Timeline>('POST', '/api/import', data),
 
   continueFrom: (tl: string, id: string, opts: GenerateOptions) => req<TLNode>('POST', node(tl, id, 'continue'), opts),
-  merge: (tl: string, id: string, withId: string, opts: GenerateOptions) =>
-    req<TLNode>('POST', node(tl, id, 'merge'), { with: withId, ...opts }),
+  addLink: (tl: string, from: string, to: string, strength: Strength, note: string) =>
+    req<InfluenceLink>('POST', `/api/timelines/${tl}/links`, { from, to, strength, note }),
+  deleteLink: (tl: string, linkId: string) => req('DELETE', `/api/timelines/${tl}/links/${linkId}`),
+  merge: (tl: string, id: string, withIds: string[], opts: GenerateOptions) =>
+    req<TLNode>('POST', node(tl, id, 'merge'), { with: withIds, ...opts }),
   branch: (tl: string, id: string, deviation: DeviationInput, autoContinue: boolean, options?: GenerateOptions) =>
     req<TLNode>('POST', node(tl, id, 'branch'), { deviation, autoContinue, options }),
   editNode: (tl: string, id: string, edit: NodeEdit) => req<TLNode>('PATCH', node(tl, id), edit),

@@ -48,7 +48,9 @@ async function main() {
 
   const { status, data } = await post(`/api/worker/jobs/${jobId}/result`, body);
   if (status < 300) {
-    console.log(`OK ${JSON.stringify(data.created ?? data.updated)}`);
+    const nodes = data.created?.length ? data.created : data.updated;
+    console.log(`OK ${JSON.stringify(nodes)}${data.links ? ` (+${data.links} link${data.links > 1 ? 's' : ''})` : ''}`);
+    for (const d of data.dropped ?? []) console.log(`  dropped link: ${d}`);
     fs.rmSync(file, { force: true });
   } else if (status === 400) {
     console.log(`INVALID\n${data.error}`);

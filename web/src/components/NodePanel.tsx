@@ -4,7 +4,7 @@ import { api, type GenerateOptions } from '../api.ts';
 import { GenerateOptionsFields } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
-import { childrenOf, descendantIds, mergeTargets, parentIdsOf } from '../graph.ts';
+import { childrenOf, descendantIds, linkTargets, mergeTargets, parentIdsOf, threadColors, threadLabel, threadRootOf } from '../graph.ts';
 
 export const PANEL_DEFAULT = 440;
 
@@ -13,12 +13,15 @@ interface Props {
   node: TLNode;
   workerOnline: boolean;
   width: number;
-  /** True while the canvas is in "pick a node to merge with" mode (Escape belongs to that). */
-  mergePicking: boolean;
+  /** True while the canvas is in "pick a second node" mode (Escape belongs to that). */
+  picking: boolean;
   onResize: (width: number) => void;
   onSelect: (id: string | null) => void;
   onBranch: (nodeId: string) => void;
   onStartMerge: (nodeId: string) => void;
+  onStartLink: (nodeId: string) => void;
+  /** Latest "+ on a node" click; opens the Continue form when it targets this node. */
+  continueRequest: { id: string; at: number } | null;
   onError: (msg: string) => void;
 }
 
@@ -32,11 +35,13 @@ export function NodePanel({
   node,
   workerOnline,
   width,
-  mergePicking,
+  picking,
   onResize,
   onSelect,
   onBranch,
   onStartMerge,
+  onStartLink,
+  continueRequest,
   onError,
 }: Props) {
   const [mode, setMode] = useState<Mode>('view');
@@ -53,8 +58,15 @@ export function NodePanel({
   );
   const descendants = useMemo(() => descendantIds(timeline, node.id).size, [timeline, node.id]);
   const canMerge = useMemo(() => mergeTargets(timeline, node.id).size > 0, [timeline, node.id]);
+  const canInfluence = useMemo(() => linkTargets(timeline, node.id).size > 0, [timeline, node.id]);
   const isConvergence = !!node.mergeParents?.length;
-  const primaryChildren = children.filter((c) => c.parentId === node.id).length;
+  // Thread starts are parallel storylines, not continuations of this one.
+  const primaryChildren = children.filter((c) => c.parentId === node.id && !c.threadName).length;
+  const threadRoot = threadRootOf(timeline, node.id);
+  const threadName = threadLabel(timeline, threadRoot);
+  const threadColor = threadColors(timeline).get(threadRoot);
+  const incoming = (timeline.links ?? []).filter((l) => l.to === node.id && timeline.nodes[l.from]);
+  const outgoing = (timeline.links ?? []).filter((l) => l.from === node.id && timeline.nodes[l.to]);
 
   /** Drag the left edge to resize; double-click it to reset. */
   function startResize(e: React.PointerEvent) {
@@ -73,15 +85,19 @@ export function NodePanel({
   }
 
   useEffect(() => setMode('view'), [node.id]);
+  // Runs after the reset above, so a + click on a node lands on its Continue form.
+  useEffect(() => {
+    if (continueRequest?.id === node.id && node.status === 'ready') setMode('continue');
+  }, [continueRequest]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || mergePicking || (e.target as HTMLElement)?.closest('.modal')) return;
+      if (e.key !== 'Escape' || picking || (e.target as HTMLElement)?.closest('.modal')) return;
       if (mode !== 'view') setMode('view');
       else onSelect(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, onSelect, mergePicking]);
+  }, [mode, onSelect, picking]);
 
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(true);
@@ -116,6 +132,11 @@ export function NodePanel({
             </span>
           )}
           {node.period && <span className="muted">{node.period}</span>}
+          {threadColor && (
+            <span className="tl-thread" style={{ '--thread': threadColor } as React.CSSProperties} title="Parallel thread this node belongs to">
+              {threadName}
+            </span>
+          )}
         </div>
         <button className="icon-btn" onClick={() => onSelect(null)} aria-label="Close panel">
           ×
@@ -244,15 +265,49 @@ export function NodePanel({
               </>
             )}
 
+            {(incoming.length > 0 || outgoing.length > 0) && (
+              <section className="panel__section">
+                <h3>Influences</h3>
+                <ul className="links">
+                  {[...incoming.map((l) => ({ l, other: l.from, dir: 'in' as const })), ...outgoing.map((l) => ({ l, other: l.to, dir: 'out' as const }))].map(
+                    ({ l, other, dir }) => {
+                      const o = timeline.nodes[other];
+                      return (
+                        <li key={l.id} className={`link link--${l.strength}`}>
+                          <button className="link__main" onClick={() => onSelect(o.id)}>
+                            <span className="link__dir">{dir === 'in' ? '⇠ Shaped by' : '⇢ Shapes'}</span>
+                            <span className={`link__strength link__strength--${l.strength}`}>{l.strength}</span>
+                            <strong>{o.title}</strong>
+                            <span className="muted small"> · {threadLabel(timeline, threadRootOf(timeline, o.id))}</span>
+                            {l.note && <span className="link__note">{l.note}</span>}
+                          </button>
+                          <button
+                            className="icon-btn"
+                            title="Remove this link"
+                            disabled={busy}
+                            onClick={() => run(() => api.deleteLink(timeline.id, l.id))}
+                          >
+                            ×
+                          </button>
+                        </li>
+                      );
+                    },
+                  )}
+                </ul>
+              </section>
+            )}
+
             <section className="panel__section panel__nav">
               {parents.map((p, i) => (
                 <button key={p.id} className="nav-link" onClick={() => onSelect(p.id)}>
-                  <span className="muted">{i === 0 ? '← Follows' : '⤚ Converges with'}</span> {p.title}
+                  <span className="muted">{i === 0 ? (node.threadName ? '🧵 Spun off from' : '← Follows') : '⤚ Converges with'}</span> {p.title}
                 </button>
               ))}
               {children.map((c) => (
                 <button key={c.id} className="nav-link" onClick={() => onSelect(c.id)}>
-                  <span className="muted">{c.parentId === node.id ? '→ Leads to' : '⤙ Merges into'}</span>{' '}
+                  <span className="muted">
+                    {c.parentId !== node.id ? '⤙ Merges into' : c.threadName ? `🧵 Starts thread "${c.threadName}":` : '→ Leads to'}
+                  </span>{' '}
                   {c.status === 'generating' ? 'Generating...' : c.title}
                   {c.likelihood !== undefined && <span className="muted"> ({Math.round(c.likelihood * 100)}%)</span>}
                 </button>
@@ -289,6 +344,14 @@ export function NodePanel({
             title={canMerge ? 'Pick a node on another branch; the model writes where the two storylines meet' : 'No node on a separate branch to merge with'}
           >
             Merge with...
+          </button>
+          <button
+            className="btn"
+            disabled={busy || !canInfluence}
+            onClick={() => onStartLink(node.id)}
+            title={canInfluence ? 'Pick a node in another thread that this event affects' : 'No node this event can influence'}
+          >
+            Influences...
           </button>
           <button className="btn btn--ghost" disabled={busy} onClick={() => setMode('edit')}>
             Edit

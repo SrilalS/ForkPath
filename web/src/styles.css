@@ -1384,19 +1384,19 @@ a.btn--ghost {
   stroke-linecap: round;
   stroke-width: 3;
 }
-.tl-node.is-merge-source {
+.tl-node.is-pick-source {
   border-color: var(--merge);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--merge) 30%, transparent);
 }
-.tl-node.is-merge-target {
+.tl-node.is-pick-target {
   border-color: color-mix(in srgb, var(--merge) 70%, transparent);
   animation: merge-pulse 1.6s ease-in-out infinite;
 }
-.tl-node.is-merge-target:hover {
+.tl-node.is-pick-target:hover {
   border-color: var(--merge);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--merge) 35%, transparent);
 }
-.tl-node.is-merge-blocked {
+.tl-node.is-pick-blocked {
   opacity: 0.35;
   filter: saturate(0.4);
   cursor: not-allowed;
@@ -1493,4 +1493,192 @@ a.btn--ghost {
   font-size: 18px;
   top: 20px;
   color: color-mix(in srgb, var(--text) 28%, transparent);
+}
+
+/* ---- parallel threads & influence links ------------------------------- */
+
+:root {
+  --influence: #f6ad55;
+}
+.tl-node.in-thread:not(.is-major)::before {
+  background: var(--thread);
+}
+.tl-chip--thread {
+  color: var(--thread);
+  background: color-mix(in srgb, var(--thread) 16%, transparent);
+}
+.tl-thread {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--thread);
+  margin-left: auto;
+}
+.tl-thread::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--thread);
+}
+.panel__meta .tl-thread {
+  margin-left: 0;
+  max-width: 180px;
+}
+.tl-edge--thread .react-flow__edge-path {
+  stroke: var(--edge-color);
+  stroke-width: 3;
+}
+.tl-edge--influence .react-flow__edge-path {
+  stroke: var(--influence);
+  stroke-dasharray: 1 7;
+  stroke-linecap: round;
+  stroke-width: 2.5;
+  opacity: 0.75;
+}
+.tl-edge--moderate .react-flow__edge-path {
+  stroke-width: 3.5;
+  opacity: 0.85;
+}
+.tl-edge--strong .react-flow__edge-path {
+  stroke-width: 4.5;
+  opacity: 1;
+}
+.tl-edge--influence .react-flow__edge-text {
+  fill: var(--influence);
+  font-size: 10px;
+}
+
+/* Pick mode for links reuses the merge look in the influence color. */
+.tl-node.pick-link.is-pick-source,
+.tl-node.pick-link.is-pick-target:hover {
+  border-color: var(--influence);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--influence) 30%, transparent);
+}
+.tl-node.pick-link.is-pick-target {
+  border-color: color-mix(in srgb, var(--influence) 70%, transparent);
+  animation: link-pulse 1.6s ease-in-out infinite;
+}
+@keyframes link-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--influence) 22%, transparent);
+  }
+}
+.merge-banner--link {
+  border-color: color-mix(in srgb, var(--influence) 60%, transparent);
+}
+
+.links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.link {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border-left: 3px solid color-mix(in srgb, var(--influence) 50%, transparent);
+}
+.link--strong {
+  border-left-color: var(--influence);
+}
+.link__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+.link__dir {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.link__strength {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--influence);
+}
+.link__note {
+  flex-basis: 100%;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.link .icon-btn {
+  margin: 4px 4px 0 0;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.segmented button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  text-align: left;
+  cursor: pointer;
+}
+.segmented button span {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.segmented button.is-active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.influence-label {
+  position: absolute;
+  pointer-events: all;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--influence);
+  background: var(--bg-2);
+  border: 1px solid color-mix(in srgb, var(--influence) 45%, transparent);
+  cursor: help;
+}
+.influence-label--strong {
+  background: color-mix(in srgb, var(--influence) 18%, var(--bg-2));
+}
+
+.merge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.merge-list__item {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 10px;
 }

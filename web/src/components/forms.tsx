@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import type { DeviationInput, GenerateOptions } from '../api.ts';
+import { STRENGTHS, type Strength } from '../../../shared/types.ts';
 
 export const SPAN_PRESETS = ['Auto', '1 year', '5 years', '10 years', '25 years', '50 years', '100 years'];
 
@@ -127,12 +128,15 @@ export function DeviationDialog({
   title,
   subtitle,
   submitLabel,
+  allowThread,
   onClose,
   onSubmit,
 }: {
   title: string;
   subtitle?: string;
   submitLabel: string;
+  /** Offer "happens alongside" (a parallel thread) next to the default alternative branch. */
+  allowThread?: boolean;
   onClose: () => void;
   onSubmit: (d: DeviationInput, autoContinue: boolean, opts: GenerateOptions) => Promise<void>;
 }) {
@@ -141,7 +145,9 @@ export function DeviationDialog({
   const [opts, setOpts] = useState<GenerateOptions>({ timeSpan: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const valid = dev.summary.trim().length > 0;
+  const [asThread, setAsThread] = useState(false);
+  const [threadName, setThreadName] = useState('');
+  const valid = dev.summary.trim().length > 0 && (!asThread || threadName.trim().length > 0);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -149,7 +155,11 @@ export function DeviationDialog({
     setBusy(true);
     setError('');
     try {
-      const d = { ...dev, title: dev.title.trim() || dev.summary.trim().split(/[.!?]/)[0].slice(0, 80) };
+      const d: DeviationInput = {
+        ...dev,
+        title: dev.title.trim() || dev.summary.trim().split(/[.!?]/)[0].slice(0, 80),
+        threadName: asThread ? threadName.trim() : undefined,
+      };
       await onSubmit(d, auto, opts);
       onClose();
     } catch (err) {
@@ -161,6 +171,24 @@ export function DeviationDialog({
   return (
     <Modal title={title} subtitle={subtitle} onClose={onClose}>
       <form onSubmit={submit} className="form">
+        {allowThread && (
+          <div className="segmented" role="radiogroup" aria-label="Branch type">
+            <button type="button" role="radio" aria-checked={!asThread} className={!asThread ? 'is-active' : ''} onClick={() => setAsThread(false)}>
+              <strong>Alternative</strong>
+              <span>Happens instead of what follows</span>
+            </button>
+            <button type="button" role="radio" aria-checked={asThread} className={asThread ? 'is-active' : ''} onClick={() => setAsThread(true)}>
+              <strong>🧵 Parallel thread</strong>
+              <span>Happens alongside, as its own storyline</span>
+            </button>
+          </div>
+        )}
+        {asThread && (
+          <label className="field">
+            <span className="field__label">Thread name</span>
+            <input placeholder="e.g. Ceylon politics" value={threadName} onChange={(e) => setThreadName(e.target.value)} />
+          </label>
+        )}
         <DeviationFields value={dev} onChange={setDev} autoFocus />
         <label className="toggle">
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
@@ -181,15 +209,13 @@ export function DeviationDialog({
   );
 }
 
-/** Confirms a convergence between two nodes on separate branches. */
+/** Confirms a convergence of 2-5 nodes on separate branches. The first one is Branch A. */
 export function MergeDialog({
-  a,
-  b,
+  nodes,
   onClose,
   onSubmit,
 }: {
-  a: { title: string; period: string };
-  b: { title: string; period: string };
+  nodes: { title: string; period: string }[];
   onClose: () => void;
   onSubmit: (opts: GenerateOptions) => Promise<void>;
 }) {
@@ -211,23 +237,40 @@ export function MergeDialog({
   }
 
   return (
-    <Modal title="Merge storylines" subtitle="Both branches are treated as having happened in the same world." onClose={onClose}>
+    <Modal
+      title={`Merge ${nodes.length} storylines`}
+      subtitle={`All ${nodes.length === 2 ? 'both' : nodes.length} branches are treated as having happened in the same world.`}
+      onClose={onClose}
+    >
       <form onSubmit={submit} className="form">
-        <div className="merge-pair">
-          <div className="merge-pair__item">
-            <span className="merge-pair__tag">A</span>
-            <strong>{a.title}</strong>
-            <span className="muted small">{a.period}</span>
+        {nodes.length === 2 ? (
+          <div className="merge-pair">
+            {nodes.map((n, i) => (
+              <Fragment key={i}>
+                {i > 0 && <div className="merge-pair__join">⤚ ⤙</div>}
+                <div className="merge-pair__item">
+                  <span className="merge-pair__tag">{String.fromCharCode(65 + i)}</span>
+                  <strong>{n.title}</strong>
+                  <span className="muted small">{n.period}</span>
+                </div>
+              </Fragment>
+            ))}
           </div>
-          <div className="merge-pair__join">⤚ ⤙</div>
-          <div className="merge-pair__item">
-            <span className="merge-pair__tag">B</span>
-            <strong>{b.title}</strong>
-            <span className="muted small">{b.period}</span>
+        ) : (
+          <div className="merge-list">
+            {nodes.map((n, i) => (
+              <div key={i} className="merge-pair__item merge-list__item">
+                <span className="merge-pair__tag">{String.fromCharCode(65 + i)}</span>
+                <div>
+                  <strong>{n.title}</strong>
+                  <span className="muted small"> · {n.period}</span>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
+        )}
         <p className="muted small">
-          The model writes where the two meet. If they contradict, it favors <strong>A</strong> unless your guidance says otherwise.
+          The model writes where they all meet. If they contradict, it favors <strong>A</strong> unless your guidance says otherwise.
         </p>
         <GenerateOptionsFields value={opts} onChange={setOpts} />
         {error && <div className="alert alert--error">{error}</div>}
@@ -237,6 +280,90 @@ export function MergeDialog({
           </button>
           <button className="btn btn--primary" disabled={busy}>
             {busy ? 'Merging...' : 'Generate convergence'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+const STRENGTH_HELP: Record<Strength, string> = {
+  mild: 'Nudges it',
+  moderate: 'Clearly shapes it',
+  strong: 'Largely drives it',
+};
+
+/** Records that one event affects another (in a different thread) without making it a parent. */
+export function LinkDialog({
+  from,
+  to,
+  onClose,
+  onSubmit,
+}: {
+  from: { title: string; period: string };
+  to: { title: string; period: string };
+  onClose: () => void;
+  onSubmit: (strength: Strength, note: string) => Promise<void>;
+}) {
+  const [strength, setStrength] = useState<Strength>('mild');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await onSubmit(strength, note.trim());
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Add influence" subtitle="The model will see this link when it writes either storyline." onClose={onClose}>
+      <form onSubmit={submit} className="form">
+        <div className="merge-pair">
+          <div className="merge-pair__item">
+            <span className="merge-pair__tag">FROM</span>
+            <strong>{from.title}</strong>
+            <span className="muted small">{from.period}</span>
+          </div>
+          <div className="merge-pair__join">⇢</div>
+          <div className="merge-pair__item">
+            <span className="merge-pair__tag">TO</span>
+            <strong>{to.title}</strong>
+            <span className="muted small">{to.period}</span>
+          </div>
+        </div>
+        <label className="field">
+          <span className="field__label">Strength</span>
+          <div className="chips">
+            {STRENGTHS.map((s) => (
+              <button type="button" key={s} className={`chip ${strength === s ? 'is-active' : ''}`} onClick={() => setStrength(s)} title={STRENGTH_HELP[s]}>
+                {s}
+              </button>
+            ))}
+          </div>
+          <span className="field__hint">{STRENGTH_HELP[strength]}</span>
+        </label>
+        <label className="field">
+          <span className="field__label">
+            How <em>optional</em>
+          </span>
+          <textarea rows={2} placeholder="e.g. Colombo reads the test as proof the bloc can protect small states." value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+        <p className="muted small">Adding a link does not regenerate anything. Regenerate the target if it should reflect the influence.</p>
+        {error && <div className="alert alert--error">{error}</div>}
+        <div className="form__actions">
+          <button type="button" className="btn btn--ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn--primary" disabled={busy}>
+            {busy ? 'Saving...' : 'Add link'}
           </button>
         </div>
       </form>

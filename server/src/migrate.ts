@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, SIGNIFICANCES, TONES, type Timeline } from '../../shared/types.ts';
+import { SCHEMA_VERSION, SIGNIFICANCES, STRENGTHS, TONES, type Timeline } from '../../shared/types.ts';
 
 /**
  * Upgrades stored or imported timelines to the current SCHEMA_VERSION.
@@ -19,6 +19,11 @@ const steps: Record<number, (tl: Raw) => Raw> = {
   },
   // v2 -> v3: optional mergeParents. Nothing to fill in; older files simply have no convergence nodes.
   2: (tl) => tl,
+  // v3 -> v4: parallel threads (optional node threadName) and influence links between nodes.
+  3: (tl) => {
+    tl.links ??= [];
+    return tl;
+  },
 };
 
 export class MigrationError extends Error {}
@@ -65,5 +70,23 @@ function sanitize(tl: Raw) {
       if (ok.length) n.mergeParents = [...new Set(ok)];
       else delete n.mergeParents;
     }
+    if (n.threadName !== undefined) {
+      const name = typeof n.threadName === 'string' ? n.threadName.trim().slice(0, 80) : '';
+      if (name && n.parentId) n.threadName = name;
+      else delete n.threadName;
+    }
+  }
+  tl.links = (Array.isArray(tl.links) ? tl.links : []).filter(
+    (l: Raw) =>
+      l &&
+      typeof l.id === 'string' &&
+      tl.nodes[l.from] &&
+      tl.nodes[l.to] &&
+      l.from !== l.to &&
+      STRENGTHS.includes(l.strength),
+  );
+  for (const l of tl.links as Raw[]) {
+    if (typeof l.note !== 'string') l.note = '';
+    if (l.source !== 'user') l.source = 'llm';
   }
 }

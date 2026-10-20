@@ -28,11 +28,13 @@ import {
   workerStatus,
 } from './jobs.ts';
 import { buildBrief } from './brief.ts';
+import { addLink, applyContinue, applyRegenerate, markStaleFrom, removeLinksFor } from './apply.ts';
 import {
   continueResult,
   deviationInput,
   formatIssues,
   generateOptions,
+  linkInput,
   nodeEdit,
   regenerateResult,
 } from './schema.ts';
@@ -114,15 +116,25 @@ function startContinue(tl: Timeline, parent: TLNode, opts: { timeSpan?: string; 
 }
 
 /** Queues a convergence node whose parents are `a` (primary) and `b`. */
-function startMerge(tl: Timeline, a: TLNode, b: TLNode, opts: { timeSpan?: string; guidance?: string }) {
-  if (a.id === b.id) throw new HttpError(400, 'Pick two different nodes to merge');
-  if (a.status !== 'ready' || b.status !== 'ready') throw new HttpError(409, 'Both nodes must be ready');
-  if (ancestorIdsOf(tl, a.id).has(b.id) || ancestorIdsOf(tl, b.id).has(a.id)) {
-    throw new HttpError(400, 'These nodes are on the same path. Merge two nodes from separate branches.');
+/** Up to this many nodes besides `a` can converge in one merge. */
+const MAX_MERGE_WITH = 4;
+
+/** Queues a convergence node whose parents are `a` (primary) and every node in `others`. */
+function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?: string; guidance?: string }) {
+  if (!others.length) throw new HttpError(400, 'Pick at least one other node to merge with');
+  if (others.length > MAX_MERGE_WITH) throw new HttpError(400, `Merge at most ${MAX_MERGE_WITH + 1} nodes at once`);
+  const all = [a, ...others];
+  if (new Set(all.map((n) => n.id)).size !== all.length) throw new HttpError(400, 'Pick different nodes to merge');
+  if (all.some((n) => n.status !== 'ready')) throw new HttpError(409, 'All nodes must be ready');
+  // Every pair must sit on separate branches; merging a node with its own ancestor makes no sense.
+  for (const x of all) {
+    const up = ancestorIdsOf(tl, x.id);
+    const clash = all.find((y) => y !== x && up.has(y.id));
+    if (clash) throw new HttpError(400, `"${clash.title}" and "${x.title}" are on the same path. Merge nodes from separate branches.`);
   }
   const placeholder = makeNode({
     parentId: a.id,
-    mergeParents: [b.id],
+    mergeParents: others.map((n) => n.id),
     kind: 'event',
     source: 'llm',
     status: 'generating',
@@ -134,7 +146,7 @@ function startMerge(tl: Timeline, a: TLNode, b: TLNode, opts: { timeSpan?: strin
     type: 'merge',
     timelineId: tl.id,
     targetNodeId: a.id,
-    mergeWith: [b.id],
+    mergeWith: others.map((n) => n.id),
     placeholderId: placeholder.id,
     timeSpan: opts.timeSpan || undefined,
     guidance: opts.guidance || undefined,
@@ -159,6 +171,7 @@ app.post(
       title: String(req.body?.title || body.title).slice(0, 140),
       rootId: root.id,
       nodes: { [root.id]: root },
+      links: [],
       createdAt: ts,
       updatedAt: ts,
     };
@@ -239,9 +252,11 @@ app.post(
   h((req) => {
     const tl = loadTimeline(req);
     const a = loadNode(tl, req);
-    const b = tl.nodes[String(req.body?.with ?? '')];
-    if (!b) throw new HttpError(404, 'Node to merge with not found');
-    const node = startMerge(tl, a, b, parse(generateOptions, req.body));
+    // `with` is one id or a list of ids.
+    const ids: unknown[] = Array.isArray(req.body?.with) ? req.body.with : [req.body?.with];
+    const others = ids.map((id) => tl.nodes[String(id ?? '')]);
+    if (others.some((n) => !n)) throw new HttpError(404, 'Node to merge with not found');
+    const node = startMerge(tl, a, others, parse(generateOptions, req.body));
     commit(tl);
     return node;
   }),
@@ -285,7 +300,7 @@ app.patch(
       if (contentChanged) {
         // Editing a node means a regenerate result would have overwritten it anyway.
         node.stale = false;
-        for (const d of descendantsOf(tl, node.id)) if (d.status === 'ready') d.stale = true;
+        markStaleFrom(tl, node.id);
       }
       commit(tl);
     }
@@ -331,6 +346,7 @@ app.post(
     if (node.status !== 'ready') {
       if (node.title === 'Generating...' || !node.summary) {
         delete tl.nodes[node.id]; // empty continue placeholder
+        removeLinksFor(tl, new Set([node.id]));
       } else {
         node.status = 'ready';
         node.jobId = undefined;
@@ -376,6 +392,32 @@ app.delete(
     const ids = new Set(doomed.map((n) => n.id));
     cancelJobsForNodes(tl.id, ids);
     for (const id of ids) delete tl.nodes[id];
+    removeLinksFor(tl, ids);
+    commit(tl);
+  }),
+);
+
+// ---- influence links -------------------------------------------------------
+
+app.post(
+  '/api/timelines/:id/links',
+  h((req) => {
+    const tl = loadTimeline(req);
+    const body = parse(linkInput, req.body);
+    const r = addLink(tl, body.from, body.to, body.strength, body.note, 'user');
+    if ('error' in r) throw new HttpError(400, `Cannot link these nodes: ${r.error}.`);
+    commit(tl);
+    return r.link;
+  }),
+);
+
+app.delete(
+  '/api/timelines/:id/links/:linkId',
+  h((req) => {
+    const tl = loadTimeline(req);
+    const before = tl.links.length;
+    tl.links = tl.links.filter((l) => l.id !== String(req.params.linkId));
+    if (tl.links.length === before) throw new HttpError(404, 'Link not found');
     commit(tl);
   }),
 );
@@ -420,8 +462,6 @@ app.post(
       finishJob(job, 'cancelled');
       throw new HttpError(410, 'Timeline was deleted. Discard this job and move on.');
     }
-    const ts = now();
-
     if (job.type === 'continue' || job.type === 'merge') {
       const result = parse(continueResult, req.body);
       const placeholder = tl.nodes[job.placeholderId!];
@@ -431,34 +471,10 @@ app.post(
         finishJob(job, 'cancelled');
         throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
       }
-      const branching = result.children.length > 1;
-      const total = result.children.reduce((s, c) => s + (c.likelihood ?? 0), 0) || 1;
-      const created: TLNode[] = [];
-      result.children.forEach((c, i) => {
-        const target =
-          i === 0 ? placeholder : makeNode({ parentId: parent.id, mergeParents, kind: 'event', source: 'llm' });
-        Object.assign(target, {
-          title: c.title,
-          period: c.period,
-          summary: c.summary,
-          narrative: c.narrative,
-          keyChanges: c.keyChanges,
-          significance: c.significance,
-          tone: c.tone,
-          likelihood: branching ? (c.likelihood ?? 0) / total : undefined,
-          branchReason: branching ? result.branchReason : undefined,
-          status: 'ready',
-          stale: false,
-          jobId: undefined,
-          error: undefined,
-          updatedAt: ts,
-        } satisfies Partial<TLNode>);
-        tl.nodes[target.id] = target;
-        created.push(target);
-      });
+      const report = applyContinue(tl, job, result);
       finishJob(job, 'done');
       commit(tl);
-      return { ok: true, created: created.map((n) => ({ id: n.id, title: n.title })) };
+      return { ok: true, ...report };
     }
 
     const result = parse(regenerateResult, req.body);
@@ -467,19 +483,10 @@ app.post(
       finishJob(job, 'cancelled');
       throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
     }
-    Object.assign(node, result.node, {
-      source: 'llm',
-      status: 'ready',
-      stale: false,
-      jobId: undefined,
-      error: undefined,
-      updatedAt: ts,
-    } satisfies Partial<TLNode>);
-    // Its children were based on the outdated version.
-    for (const d of descendantsOf(tl, node.id)) if (d.status === 'ready') d.stale = true;
+    const report = applyRegenerate(tl, node, result);
     finishJob(job, 'done');
     commit(tl);
-    return { ok: true, updated: { id: node.id, title: node.title } };
+    return { ok: true, updated: { id: node.id, title: node.title }, ...report };
   }),
 );
 

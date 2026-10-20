@@ -6,8 +6,9 @@
  *   1: original format (no schemaVersion field)
  *   2: adds schemaVersion, node significance and tone
  *   3: adds node mergeParents (convergence of separate branches)
+ *   4: adds parallel threads (node threadName) and timeline influence links
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type NodeKind = 'deviation' | 'event';
 export type NodeSource = 'user' | 'llm' | 'llm-edited';
@@ -39,6 +40,11 @@ export interface TLNode {
    * Never an ancestor or descendant of parentId, so the graph stays acyclic.
    */
   mergeParents?: string[];
+  /**
+   * Set when this node starts a parallel thread: a separate stream of events in the SAME world as its
+   * parent, not an alternative to its siblings. Its descendants belong to the thread until the next one.
+   */
+  threadName?: string;
   kind: NodeKind;
   source: NodeSource;
   status: NodeStatus;
@@ -63,12 +69,27 @@ export interface TLNode {
   updatedAt: string;
 }
 
+export const STRENGTHS = ['mild', 'moderate', 'strong'] as const;
+export type Strength = (typeof STRENGTHS)[number];
+
+/** "Event `from` affects event `to`", across threads. Not a parent link: it only adds context. */
+export interface InfluenceLink {
+  id: string;
+  from: string;
+  to: string;
+  strength: Strength;
+  note: string;
+  source: 'llm' | 'user';
+  createdAt: string;
+}
+
 export interface Timeline {
   schemaVersion: number;
   id: string;
   title: string;
   rootId: string;
   nodes: Record<string, TLNode>;
+  links: InfluenceLink[];
   createdAt: string;
   updatedAt: string;
 }

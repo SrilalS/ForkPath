@@ -1,11 +1,33 @@
 import { z } from 'zod';
-import { SIGNIFICANCES, TONES } from '../../shared/types.ts';
+import { SIGNIFICANCES, STRENGTHS, TONES } from '../../shared/types.ts';
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const significance = z.enum(SIGNIFICANCES);
 const tone = z.enum(TONES);
 
-export const generatedNode = z.object({
+/**
+ * A link the model asks for between a node it writes and another node: an existing one by id, or one
+ * written in the same result by "@key".
+ */
+const linkRef = z.object({
+  node: z.string().trim().min(1).max(41),
+  strength: z.enum(STRENGTHS),
+  note: z.string().trim().max(400).default(''),
+});
+const links = {
+  /** This node affects those existing nodes. */
+  influences: z.array(linkRef).max(6).optional(),
+  /** Those existing nodes affect this node. */
+  influencedBy: z.array(linkRef).max(6).optional(),
+};
+
+const nodeContent = {
+  /** Optional handle so other nodes in the same result can link to this one as "@key". */
+  key: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9_-]{1,40}$/i, 'letters, digits, - or _ only')
+    .optional(),
   title: text(140),
   period: text(80),
   summary: text(800),
@@ -13,15 +35,34 @@ export const generatedNode = z.object({
   keyChanges: z.array(text(300)).min(1).max(10),
   significance,
   tone,
+};
+
+/** The first node of a new parallel thread (nested in a child, or top-level from the node being continued). */
+export const threadStart = z.object({ thread: text(80), ...nodeContent, ...links });
+
+export const generatedNode = z.object({
+  ...nodeContent,
   likelihood: z.number().gt(0).lte(1).optional(),
+  ...links,
+  spawnThreads: z.array(threadStart).max(2).optional(),
 });
 
 export const continueResult = z
   .object({
-    children: z.array(generatedNode).min(1).max(4),
+    /** Alternatives: only one of them happens. */
+    children: z.array(generatedNode).max(4).default([]),
     branchReason: z.string().trim().max(600).optional(),
+    /** Parallel threads starting from the node being continued: all of them happen, alongside each other. */
+    threads: z.array(threadStart).max(4).default([]),
   })
   .superRefine((val, ctx) => {
+    if (!val.children.length && !val.threads.length) {
+      ctx.addIssue({ code: 'custom', path: ['children'], message: 'give at least one child or one top-level thread' });
+    }
+    const keys = [...val.children, ...val.children.flatMap((c) => c.spawnThreads ?? []), ...val.threads]
+      .map((n) => n.key)
+      .filter(Boolean);
+    if (new Set(keys).size !== keys.length) ctx.addIssue({ code: 'custom', path: ['key'], message: 'keys must be unique' });
     if (val.children.length < 2) return;
     if (!val.branchReason) {
       ctx.addIssue({ code: 'custom', path: ['branchReason'], message: 'required when returning 2-4 children' });
@@ -33,7 +74,16 @@ export const continueResult = z
     });
   });
 
-export const regenerateResult = z.object({ node: generatedNode.omit({ likelihood: true }) });
+export const regenerateResult = z.object({ node: z.object({ ...nodeContent, ...links }) });
+
+export type LinkRef = z.infer<typeof linkRef>;
+
+export const linkInput = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+  strength: z.enum(STRENGTHS),
+  note: z.string().trim().max(400).default(''),
+});
 
 export const deviationInput = z.object({
   title: text(140),
@@ -42,6 +92,8 @@ export const deviationInput = z.object({
   narrative: z.string().trim().max(8000).default(''),
   significance: significance.default('pivotal'),
   tone: tone.default('neutral'),
+  /** Set to start a parallel thread (happens alongside) instead of an alternative. */
+  threadName: z.string().trim().max(80).optional(),
 });
 
 export const nodeEdit = z.object({

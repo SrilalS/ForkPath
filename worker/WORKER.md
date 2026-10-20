@@ -58,13 +58,13 @@ Rules for the loop:
 | `MERGE` | Same shape as CONTINUE | ✅ yes |
 | `REGENERATE` | `{ "node": { ... } }` | ❌ no, exactly one node |
 
-**MERGE** means the user kept two storylines apart (Branch A and Branch B, for example two regions) and
-now wants them to meet. Both happened in the same world. Write the node(s) where they converge:
+**MERGE** means the user kept two to five storylines apart (Branch A, B, C... for example separate regions)
+and now wants them to meet. All of them happened in the same world. Write the node(s) where they converge:
 
-- Use facts from **both** branches and make the convergence explicit ("As the Ming fleet that reached
+- Use facts from **every** branch and make the convergence explicit ("As the Ming fleet that reached
   California in 1438 meets the Portuguese pushing into the Pacific, ...").
-- Where the branches contradict, resolve it in the narrative and favor Branch A unless guidance says otherwise.
-- The period starts after the later of the two branch endings.
+- Where branches contradict, resolve it in the narrative and favor Branch A unless guidance says otherwise.
+- The period starts after the latest of the branch endings.
 - Convergences are often `major`, but rate them honestly.
 
 Nodes tagged `CONVERGENCE` in a chain follow from a parallel storyline too; its ending is quoted under them.
@@ -157,6 +157,63 @@ When branching:
 
 ---
 
+## 4b. Threads and influence links
+
+Branches are **alternatives** (only one happens). Threads are **parallel**: a separate stream of events in the
+same world. Use them to keep each node focused instead of cramming unrelated storylines into one.
+
+```
+ Main:     A ──▶ B ──▶ C
+                 │ ╲ mild
+         spawns  │  ╲
+                 ▼   ▼
+ Thread X:      X1 ──▶ X2
+```
+
+### Pick the right structure
+
+| The user or the history calls for... | Use | Result |
+|---|---|---|
+| Different possible outcomes, only one can be true | `children` (2-4, with likelihoods) | Alternatives |
+| Separate storylines that **all** happen from here, e.g. "one branch on India, another on Sri Lanka" | top-level `threads` | Parallel threads from the node being continued |
+| The next event, which also sets off a side storyline | one `children` entry with `spawnThreads` | A thread hanging off that new event |
+
+⚠️ Users often say "branch" for both. If the branches describe different regions, actors or themes that
+happen **at the same time**, they are **threads**, not alternatives, and they must not be chained one after
+the other. Put both in top-level `threads` and link them to each other where they interact.
+
+```
+ top-level threads (both happen)         spawnThreads (B sets off X)
+   A ─┬─▶ 🧵 India ◀┐                      A ──▶ B ──▶ ...
+      │            ┆ @keys                       └─▶ 🧵 X
+      └─▶ 🧵 Sri Lanka ┘
+```
+
+**Spawn a thread** (`spawnThreads` on a child, max 2, usually none) when the event you are writing sets off
+a related but distinct storyline that will need its own follow-up, for example a coup in a neighboring
+country, a scientific program, or a religious movement. Do not spawn one for a side effect that is fully
+told in a sentence or two; mention it in the narrative instead.
+
+- The thread starts from the child it is nested in, in the same world as that child.
+- `thread` is a short, stable name for the storyline ("Ceylon politics", "Soviet space program").
+- Write only its first event. The user continues threads themselves.
+- Never write new events into an existing thread. Link to it instead.
+
+**Influence links** (`influences` / `influencedBy` on any node you write, including thread starts and
+REGENERATE) record that one event affects another in a different thread, without making it a parent.
+
+- `node` is an id shown in the brief (`[id: ...]`), or `@key` for another node in the same result (give that
+  node a `"key"`). Use `@key` to connect parallel threads you start together.
+- `strength`: `mild` (nudges it), `moderate` (clearly shapes it), `strong` (largely drives it).
+- `note`: one sentence on the effect.
+- Only link when there is a real causal effect. The brief's "Other threads in this world" section shows the
+  latest event of each parallel thread; use it to stay consistent and to find link targets.
+- The server drops links that break world rules (for example into a node shared by alternatives your node is
+  not part of, or between alternatives) and reports them in the `OK` line. That is not an error; nothing else
+  needs fixing.
+
+---
+
 ## 5. Examples
 
 ### CONTINUE, single child
@@ -193,6 +250,60 @@ When branching:
 }
 ```
 
+### CONTINUE, spawning a thread and linking
+
+```json
+{
+  "children": [
+    {
+      "title": "Beijing Tests Its Bomb Early",
+      "period": "1962",
+      "summary": "...", "narrative": "...", "keyChanges": ["..."],
+      "significance": "major", "tone": "conflict",
+      "influences": [ { "node": "7938e34f", "strength": "mild", "note": "Colombo reads the test as proof the socialist bloc can protect small states." } ],
+      "spawnThreads": [
+        {
+          "thread": "Indian nuclear program",
+          "title": "New Delhi Accelerates Trombay",
+          "period": "1962-1964",
+          "summary": "...", "narrative": "...", "keyChanges": ["..."],
+          "significance": "notable", "tone": "discovery"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### CONTINUE, two parallel threads that influence each other
+
+Guidance: "One branch on India's southern states, another on Sri Lanka rebuilding its south."
+
+```json
+{
+  "threads": [
+    {
+      "thread": "South India",
+      "key": "india",
+      "title": "The Southern States Revolt Against New Delhi",
+      "period": "1993-1998",
+      "summary": "...", "narrative": "...", "keyChanges": ["..."],
+      "significance": "major", "tone": "upheaval",
+      "influences": [ { "node": "@lanka", "strength": "moderate", "note": "Unrest across the Palk Strait pushes Colombo to secure its south." } ]
+    },
+    {
+      "thread": "Sri Lankan reconstruction",
+      "key": "lanka",
+      "title": "Expressways South and the Port at Hambantota",
+      "period": "1995-2000",
+      "summary": "...", "narrative": "...", "keyChanges": ["..."],
+      "significance": "notable", "tone": "prosperity",
+      "influences": [ { "node": "@india", "strength": "mild", "note": "Southern ports offer Tamil Nadu an outside trading partner." } ]
+    }
+  ]
+}
+```
+
 ### REGENERATE
 
 ```json
@@ -211,6 +322,9 @@ When branching:
 | 📄 | `narrative` is one JSON string. Paragraph breaks are `\n\n` inside it, not real newlines in the file (the Write tool content must still be valid JSON). |
 | 🔢 | `likelihood` is required on every child when there are 2-4, and forbidden on REGENERATE. |
 | 🎨 | `significance` and `tone` are required on every node, including REGENERATE. Missing them gives `INVALID`. |
+| 🧵 | Top-level `threads` start from the node being continued; `spawnThreads` go **inside** a child and start from it. Thread starts have `thread` but no `likelihood`. |
+| 🔀 | "Make two branches, one on X and one on Y" about things happening at the same time = two top-level `threads`, never a child with a thread chained under it. |
+| 🔗 | Link ids must come from the brief. A made-up id is dropped and reported in the `OK` line. |
 | 🧹 | `submit.mjs` deletes the result file on success, so a stale file never gets resubmitted. |
 | 🔁 | `INVALID` means nothing was saved. Fix the file and run `submit.mjs` again with the same id. |
 | 💬 | Don't narrate each poll. A short line per completed job ("✅ abc123: Stalemate on the Mississippi") is enough. |

@@ -15,7 +15,7 @@ const PARTS: [RegExp, number][] = [
 
 export function parsePeriodStart(period: string): number | null {
   // En and em dashes (written as escapes) count as range separators.
-  const p = period.toLowerCase().replace(/[–—]/g, '-').trim();
+  const p = period.toLowerCase().replace(/[\u2013\u2014]/g, '-').trim();
   if (!p) return null;
   const bc = /\b(bc|bce|b\.c\.?)\b/.test(p);
   const sign = bc ? -1 : 1;
