@@ -48,6 +48,7 @@ import {
   regenerateIssues,
   putLink,
   removeLinksFor,
+  reviewReasonFor,
 } from './apply.ts';
 import {
   continueResult,
@@ -776,10 +777,10 @@ function submitResult(jobId: string, body: unknown, gen?: GenerationInfo) {
     finishJob(job, 'cancelled');
     throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
   }
-  rejectIssues(regenerateIssues(tl, node, result));
+  rejectIssues(regenerateIssues(tl, node, result, job.review));
   const report = applyRegenerate(tl, node, result);
   stampGeneration(tl, job, [node.id], gen);
-  const reviews = startReviews(tl, job, [{ id: node.id, reviewReason: result.node.requestReview }]);
+  const reviews = startReviews(tl, job, [{ id: node.id, reviewReason: reviewReasonFor(result.node) }]);
   noteWorkerJob(tl, job, gen);
   finishJob(job, 'done');
   commit(tl);

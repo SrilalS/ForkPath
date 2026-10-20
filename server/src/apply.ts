@@ -1,18 +1,53 @@
 // Applies worker results and link edits to a timeline. Pure functions over the Timeline object (no I/O),
 // so they can be tested without the HTTP layer.
-import type { InfluenceLink, Job, Strength, Timeline, TLNode } from '../../shared/types.ts';
+import type { InfluenceLink, Job, Significance, Strength, Timeline, TLNode } from '../../shared/types.ts';
 import { canLink, effectiveYear, INFLUENCE_WINDOW_YEARS, startYear, streamNameOf, WorldIndex } from '../../shared/world.ts';
 import { parsePeriodStart } from '../../shared/time.ts';
 import { descendantsOf, makeNode, newId, now } from './store.ts';
-import type { continueResult, LinkRef, regenerateResult, threadStart } from './schema.ts';
+import type { Confidence, continueResult, LinkRef, regenerateResult, threadStart } from './schema.ts';
 import type { z } from 'zod';
 
 type ContinueResult = z.infer<typeof continueResult>;
 type RegenerateResult = z.infer<typeof regenerateResult>;
 type ThreadStart = z.infer<typeof threadStart>;
 
+/** The review-related fields of any node a writer returns. */
+interface ReviewSignals {
+  title: string;
+  significance: Significance;
+  requestReview?: string;
+  confidence?: Confidence;
+  doubt?: string;
+}
+
+/**
+ * Why a node gets a plausibility review when the user lets the writer decide (review option "auto"), or
+ * undefined. Writers almost never volunteer doubt, so they rate every node instead: low confidence gets a
+ * review, and so does medium on a major or pivotal node, where a weak link costs the most.
+ */
+export function reviewReasonFor(w: ReviewSignals): string | undefined {
+  if (w.requestReview) return w.requestReview;
+  const big = w.significance === 'major' || w.significance === 'pivotal';
+  if (w.confidence !== 'low' && !(w.confidence === 'medium' && big)) return undefined;
+  return `Writer confidence ${w.confidence}${big ? ` on a ${w.significance} event` : ''}: ${w.doubt ?? 'no reason given'}`.slice(0, 300);
+}
+
+/** In "auto" review mode every written node needs a confidence rating, and a doubt unless it is high. */
+function confidenceIssues(written: ReviewSignals[], review: Job['review']): string[] {
+  if (review !== 'auto') return [];
+  const issues: string[] = [];
+  for (const w of written) {
+    if (!w.confidence) {
+      issues.push(`"${w.title}": add "confidence": "high" | "medium" | "low" (the user lets you decide on plausibility reviews).`);
+    } else if (w.confidence !== 'high' && !w.doubt) {
+      issues.push(`"${w.title}": confidence is ${w.confidence}, so add "doubt": the weakest claim, in one sentence.`);
+    }
+  }
+  return issues;
+}
+
 export interface ApplyReport {
-  /** reviewReason: the writer asked for a plausibility review of this node (used when the review option is "auto"). */
+  /** reviewReason: why this node should get a plausibility review (used when the review option is "auto"). */
   created: { id: string; title: string; thread?: string; reviewReason?: string }[];
   links: number;
   /** Links the model asked for that were invalid, with the reason; the rest of the result still applies. */
@@ -146,7 +181,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
     node.likelihood = branching ? (c.likelihood ?? 0) / total : undefined;
     node.branchReason = branching ? result.branchReason : undefined;
     tl.nodes[node.id] = node;
-    report.created.push({ id: node.id, title: node.title, reviewReason: c.requestReview });
+    report.created.push({ id: node.id, title: node.title, reviewReason: reviewReasonFor(c) });
     pendingLinks.push([node.id, c]);
     for (const f of c.followUps ?? []) report.followUps.push({ source: node.id, ...f });
 
@@ -155,7 +190,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
       fill(start, t, ts);
       remember(start, t);
       tl.nodes[start.id] = start;
-      report.created.push({ id: start.id, title: start.title, thread: t.thread, reviewReason: t.requestReview });
+      report.created.push({ id: start.id, title: start.title, thread: t.thread, reviewReason: reviewReasonFor(t) });
       pendingLinks.push([start.id, t]);
     }
   });
@@ -166,7 +201,7 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
     fill(start, t, ts);
     remember(start, t);
     tl.nodes[start.id] = start;
-    report.created.push({ id: start.id, title: start.title, thread: t.thread, reviewReason: t.requestReview });
+    report.created.push({ id: start.id, title: start.title, thread: t.thread, reviewReason: reviewReasonFor(t) });
     pendingLinks.push([start.id, t]);
   }
 
@@ -283,6 +318,7 @@ export function continueIssues(tl: Timeline, job: Job, result: ContinueResult, m
   issues.push(...undatedIssues(tl, written, job.targetNodeId));
   const keys = new Set(written.map((w) => w.key).filter((k): k is string => !!k));
   issues.push(...refIssues(tl, written, keys));
+  issues.push(...confidenceIssues(written, job.review));
   if (job.type === 'influence' && !result.influenceNote) {
     issues.push('influenceNote is required on INFLUENCE: one sentence on the effect, shown on the arrow.');
   }
@@ -304,7 +340,7 @@ export function continueIssues(tl: Timeline, job: Job, result: ContinueResult, m
  * Everything wrong with a REGENERATE result: it must still start no earlier than its parents and no later
  * than its earliest child, carry a year, and link only to real nodes.
  */
-export function regenerateIssues(tl: Timeline, node: TLNode, result: RegenerateResult): string[] {
+export function regenerateIssues(tl: Timeline, node: TLNode, result: RegenerateResult, review?: Job['review']): string[] {
   const issues = chronologyIssues(tl, [result.node], [node.parentId, ...(node.mergeParents ?? [])].filter((p): p is string => !!p));
   if (node.parentId) issues.push(...undatedIssues(tl, [result.node], node.parentId));
   const y = periodYear(result.node.period);
@@ -323,6 +359,7 @@ export function regenerateIssues(tl: Timeline, node: TLNode, result: RegenerateR
     }
   }
   issues.push(...refIssues(tl, [result.node], new Set()));
+  issues.push(...confidenceIssues([result.node], review));
   return issues;
 }
 
