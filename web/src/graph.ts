@@ -26,14 +26,19 @@ export function mergeTargets(tl: Timeline, sourceId: string, selected: string[] 
   return out;
 }
 
-/** Nodes that `sourceId` may influence under the world rules. */
-export function linkTargets(tl: Timeline, sourceId: string): Set<string> {
-  const ix = new WorldIndex(tl);
+/** Nodes after which `sourceId` can influence a new event (see WorldIndex.canInfluence). */
+export function influenceTargets(tl: Timeline, sourceId: string, ix = new WorldIndex(tl)): Set<string> {
   return new Set(
     Object.values(tl.nodes)
-      .filter((n) => n.status === 'ready' && ix.canLink(sourceId, n.id).ok)
+      .filter((n) => ix.canInfluence(sourceId, n.id).ok)
       .map((n) => n.id),
   );
+}
+
+/** Why `sourceId` cannot influence a new event after `target`, or null when it can. */
+export function influenceBlocker(tl: Timeline, sourceId: string, target: string): string | null {
+  const check = new WorldIndex(tl).canInfluence(sourceId, target);
+  return check.ok ? null : check.reason;
 }
 
 const THREAD_COLORS = ['#4fd1c5', '#f687b3', '#9ae6b4', '#fbd38d', '#90cdf4', '#d6bcfa'];

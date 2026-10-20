@@ -110,6 +110,35 @@ export class WorldIndex {
   canLink(from: string, to: string): LinkCheck {
     return checkLink(this, from, to);
   }
+
+  /**
+   * Whether the user can make `from` influence a NEW event written after `target` (the influence flow).
+   * Like Merge, this treats separate branches as streams of one world, so the world rules of canLink do
+   * not apply; the dates are checked when the result comes back. `target` may be an ancestor of `from`
+   * (a thread influencing the stream it branched off), but not an earlier node in `from`'s own stream.
+   */
+  canInfluence(from: string, target: string): LinkCheck {
+    const tl = this.tl;
+    const f = tl.nodes[from];
+    const t = tl.nodes[target];
+    if (!f || !t) return { ok: false, reason: 'node not found' };
+    if (from === target) return { ok: false, reason: 'pick a node in another stream' };
+    if (t.status !== 'ready') return { ok: false, reason: `"${t.title}" is not ready yet` };
+    const up = ancestorIds(tl, from);
+    if (ancestorIds(tl, target).has(from)) return { ok: false, reason: `"${t.title}" already follows from "${f.title}"` };
+    // A new non-thread child of `target` is an alternative to its existing ones: invalid if `from` lies under one.
+    const rival = this.children(target).find((c) => !c.threadName && c.parentId === target && (c.id === from || up.has(c.id)));
+    if (rival) {
+      return {
+        ok: false,
+        reason:
+          rival.id === from
+            ? `"${t.title}" is the event right before it in the same stream; use Continue instead`
+            : `"${t.title}" is earlier in the same stream (a new event there would be an alternative to "${rival.title}")`,
+      };
+    }
+    return { ok: true };
+  }
 }
 
 /** Every alternative picked on the way to `id` (through primary and convergence parents). */

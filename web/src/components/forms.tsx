@@ -293,20 +293,29 @@ const STRENGTH_HELP: Record<Strength, string> = {
   strong: 'Largely drives it',
 };
 
-/** Records that one event affects another (in a different thread) without making it a parent. */
-export function LinkDialog({
+export interface InfluenceTarget {
+  title: string;
+  period: string;
+  /** Thread the target belongs to ("Main" for the main stream). */
+  stream: string;
+  /** Existing non-thread continuations: the new event becomes an alternative to them. */
+  existing: number;
+}
+
+/** One event influences 1-4 other streams: the model writes a new event after each target showing the effect. */
+export function InfluenceDialog({
   from,
-  to,
+  targets,
   onClose,
   onSubmit,
 }: {
   from: { title: string; period: string };
-  to: { title: string; period: string };
+  targets: InfluenceTarget[];
   onClose: () => void;
-  onSubmit: (strength: Strength, note: string) => Promise<void>;
+  onSubmit: (strength: Strength, opts: GenerateOptions) => Promise<void>;
 }) {
-  const [strength, setStrength] = useState<Strength>('mild');
-  const [note, setNote] = useState('');
+  const [strength, setStrength] = useState<Strength>('moderate');
+  const [opts, setOpts] = useState<GenerateOptions>({ timeSpan: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -315,7 +324,7 @@ export function LinkDialog({
     setBusy(true);
     setError('');
     try {
-      await onSubmit(strength, note.trim());
+      await onSubmit(strength, opts);
       onClose();
     } catch (err) {
       setError((err as Error).message);
@@ -323,21 +332,39 @@ export function LinkDialog({
     }
   }
 
+  const n = targets.length;
   return (
-    <Modal title="Add influence" subtitle="The model will see this link when it writes either storyline." onClose={onClose}>
+    <Modal
+      title={n === 1 ? 'Influence a stream' : `Influence ${n} streams`}
+      subtitle={`The model writes a new event after ${n === 1 ? 'the picked node' : 'each picked node'}, shaped by this event.`}
+      onClose={onClose}
+    >
       <form onSubmit={submit} className="form">
-        <div className="merge-pair">
-          <div className="merge-pair__item">
+        <div className="merge-list">
+          <div className="merge-pair__item merge-list__item">
             <span className="merge-pair__tag">FROM</span>
-            <strong>{from.title}</strong>
-            <span className="muted small">{from.period}</span>
+            <div>
+              <strong>{from.title}</strong>
+              <span className="muted small"> · {from.period}</span>
+            </div>
           </div>
-          <div className="merge-pair__join">⇢</div>
-          <div className="merge-pair__item">
-            <span className="merge-pair__tag">TO</span>
-            <strong>{to.title}</strong>
-            <span className="muted small">{to.period}</span>
-          </div>
+          {targets.map((t, i) => (
+            <div key={i} className="merge-pair__item merge-list__item">
+              <span className="merge-pair__tag">⇢</span>
+              <div>
+                <strong>{t.title}</strong>
+                <span className="muted small">
+                  {' '}
+                  · {t.period} · {t.stream}
+                </span>
+                {t.existing > 0 && (
+                  <div className="muted small">
+                    Already continues; the new event becomes an alternative to {t.existing === 1 ? 'that continuation' : `its ${t.existing} continuations`}.
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
         <label className="field">
           <span className="field__label">Strength</span>
@@ -350,23 +377,18 @@ export function LinkDialog({
           </div>
           <span className="field__hint">{STRENGTH_HELP[strength]}</span>
         </label>
-        <label className="field">
-          <span className="field__label">
-            How <em>optional</em>
-          </span>
-          <textarea rows={2} placeholder="e.g. Colombo reads the test as proof the bloc can protect small states." value={note} onChange={(e) => setNote(e.target.value)} />
-        </label>
-        <p className="muted small">Adding a link does not regenerate anything. Regenerate the target if it should reflect the influence.</p>
+        <GenerateOptionsFields value={opts} onChange={setOpts} />
         {error && <div className="alert alert--error">{error}</div>}
         <div className="form__actions">
           <button type="button" className="btn btn--ghost" onClick={onClose}>
             Cancel
           </button>
           <button className="btn btn--primary" disabled={busy}>
-            {busy ? 'Saving...' : 'Add link'}
+            {busy ? 'Queuing...' : n === 1 ? 'Generate influenced event' : `Generate ${n} influenced events`}
           </button>
         </div>
       </form>
     </Modal>
   );
 }
+

@@ -112,19 +112,21 @@ export interface TimelineSummary {
   updatedAt: string;
 }
 
-export type JobType = 'continue' | 'regenerate' | 'merge';
+export type JobType = 'continue' | 'regenerate' | 'merge' | 'influence';
 export type JobStatus = 'pending' | 'claimed' | 'done' | 'failed' | 'cancelled';
 
 export interface Job {
   id: string;
   type: JobType;
   timelineId: string;
-  /** continue: the parent node. regenerate: the node being rewritten. */
+  /** continue, merge, influence: the parent node. regenerate: the node being rewritten. */
   targetNodeId: string;
   /** continue: the placeholder child created while waiting. */
   placeholderId?: string;
   /** merge: the other node(s) whose branch converges with targetNodeId. */
   mergeWith?: string[];
+  /** influence: the event (in another stream) whose effect the new node after targetNodeId shows. */
+  influenceFrom?: string;
   timeSpan?: string;
   guidance?: string;
   status: JobStatus;

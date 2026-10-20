@@ -1,4 +1,4 @@
-import { SIGNIFICANCES, type Job, type Significance, type Timeline, type TLNode } from '../../shared/types.ts';
+import { SIGNIFICANCES, type Job, type Significance, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
 import { ancestorIds, threadLabel, threadRootOf, WorldIndex } from '../../shared/world.ts';
 import { parsePeriodStart } from '../../shared/time.ts';
 import { childrenOf, pathTo } from './store.ts';
@@ -147,9 +147,11 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
     'Give a node "key": "india" so other nodes in this same result can link to it as "@india".';
   const node = '"title": "", "period": "", "summary": "", "narrative": "", "keyChanges": [""], "significance": "notable", "tone": "neutral"';
   const example =
-    shape === 'children'
-      ? `{ "children": [ { ${node}, "likelihood": 1, "influences": [], "influencedBy": [], "spawnThreads": [] } ], "branchReason": "", "threads": [] }`
-      : `{ "node": { ${node}, "influences": [], "influencedBy": [] } }`;
+    job.type === 'influence'
+      ? `{ "children": [ { ${node}, "influences": [], "influencedBy": [] } ], "influenceNote": "" }`
+      : shape === 'children'
+        ? `{ "children": [ { ${node}, "likelihood": 1, "influences": [], "influencedBy": [], "spawnThreads": [] } ], "branchReason": "", "threads": [] }`
+        : `{ "node": { ${node}, "influences": [], "influencedBy": [] } }`;
   const lines = [
     '',
     '## Your response',
@@ -162,6 +164,14 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
     linkHint,
   ];
   if (shape === 'node') return [...lines, 'Regenerate never branches: return exactly one node.'];
+  if (job.type === 'influence') {
+    return [
+      ...lines,
+      '- One child normally: the next event in THIS stream, shaped by the influencing event. 2-4 alternatives (with likelihoods and branchReason) only when how the stream reacts is genuinely uncertain.',
+      '- "influenceNote": one sentence on the effect, shown on the arrow. The server links the influencing event to every child; do not add that link yourself.',
+      '- "threads" and "spawnThreads" work as in CONTINUE but are rarely needed here.',
+    ];
+  }
   return [
     ...lines,
     'Pick the structure (details in WORKER.md "4b"):',
@@ -172,6 +182,12 @@ function responseSection(job: Job, tl: Timeline, shape: 'children' | 'node'): st
     'You may combine them (e.g. no children and two threads), but give at least one child or one thread.',
   ];
 }
+
+const STRENGTH_MEANING: Record<Strength, string> = {
+  mild: 'it nudges this stream',
+  moderate: 'it clearly shapes this stream',
+  strong: 'it largely drives what happens next here',
+};
 
 const timeSpanLine = (job: Job) =>
   `Requested time span: ${job.timeSpan?.trim() || 'not specified. Choose the span that best fits the next meaningful development.'}`;
@@ -231,6 +247,44 @@ export function buildBrief(job: Job, tl: Timeline): string {
         tl.nodes[job.targetNodeId],
         new Set([job.placeholderId ?? '', ...others.flatMap((id) => pathTo(tl, id).map((n) => n.id))]),
       ),
+      ...responseSection(job, tl, 'children'),
+    );
+  } else if (job.type === 'influence') {
+    const chain = pathTo(tl, job.targetNodeId);
+    const target = tl.nodes[job.targetNodeId];
+    const source = tl.nodes[job.influenceFrom ?? ''];
+    const strength = tl.links.find((l) => l.from === source?.id && l.to === job.placeholderId)?.strength ?? 'moderate';
+    const siblings = childrenOf(tl, target.id).filter(
+      (c) => c.id !== job.placeholderId && c.status === 'ready' && c.parentId === target.id && !c.threadName,
+    );
+    const { fork, nodes, offset } = source ? divergentPart(tl, chain, source.id) : { fork: null, nodes: [], offset: 0 };
+    parts.push(
+      `# Job ${job.id}: INFLUENCE`,
+      `Timeline: "${tl.title}"`,
+      `Task: an event in another stream, "${source?.title}" (${source?.period || 'no date'}), affects this stream. ` +
+        `Write what happens NEXT in this stream, after node ${chain.length} ("${target.title}"), showing that effect.`,
+      `Strength set by the user: ${strength} (${STRENGTH_MEANING[strength]}). The effect must be visible in the title or summary, and explained in the narrative.`,
+      'Both events happened in the same world. The new node starts no earlier than either of them.',
+      timeSpanLine(job),
+      `User guidance: ${job.guidance?.trim() || 'none'}`,
+      '',
+      `## This stream so far (thread "${threadLabel(tl, threadRootOf(tl, target.id))}", oldest first, the last entry is the node you continue from)`,
+      chainSection(tl, chain),
+      '',
+      `## The influencing stream (thread "${source ? threadLabel(tl, threadRootOf(tl, source.id)) : '?'}"): ` +
+        `${fork ? `splits off after "${fork.title}"` : 'separate root'}, ends with the influencing event`,
+      chainSection(tl, nodes, offset),
+    );
+    if (siblings.length) {
+      parts.push(
+        '',
+        '## Continuations that ALREADY exist from this node',
+        'Your node becomes an alternative to these (the world where this influence happens). Do not repeat them.',
+        ...siblings.map((s) => `- ${s.title} (${s.period}): ${s.summary}`),
+      );
+    }
+    parts.push(
+      ...threadContext(tl, chain, target, new Set([job.placeholderId ?? '', ...(source ? pathTo(tl, source.id).map((n) => n.id) : [])])),
       ...responseSection(job, tl, 'children'),
     );
   } else {

@@ -54,6 +54,8 @@ export const continueResult = z
     branchReason: z.string().trim().max(600).optional(),
     /** Parallel threads starting from the node being continued: all of them happen, alongside each other. */
     threads: z.array(threadStart).max(4).default([]),
+    /** INFLUENCE only: one sentence on the effect, shown on the influence link. */
+    influenceNote: z.string().trim().max(400).optional(),
   })
   .superRefine((val, ctx) => {
     if (!val.children.length && !val.threads.length) {
@@ -109,6 +111,12 @@ export const nodeEdit = z.object({
 export const generateOptions = z.object({
   timeSpan: z.string().trim().max(80).optional(),
   guidance: z.string().trim().max(1000).optional(),
+});
+
+export const influenceInput = generateOptions.extend({
+  /** Nodes in other streams; the agent writes a new event after each one. */
+  targets: z.array(z.string().min(1)).min(1).max(4),
+  strength: z.enum(STRENGTHS).default('moderate'),
 });
 
 export function formatIssues(err: z.ZodError): string {

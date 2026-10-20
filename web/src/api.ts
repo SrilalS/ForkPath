@@ -46,6 +46,9 @@ export const api = {
   addLink: (tl: string, from: string, to: string, strength: Strength, note: string) =>
     req<InfluenceLink>('POST', `/api/timelines/${tl}/links`, { from, to, strength, note }),
   deleteLink: (tl: string, linkId: string) => req('DELETE', `/api/timelines/${tl}/links/${linkId}`),
+  /** `id` influences each target: one new event is generated after every target. Returns the placeholders. */
+  influence: (tl: string, id: string, targets: string[], strength: Strength, opts: GenerateOptions) =>
+    req<TLNode[]>('POST', node(tl, id, 'influence'), { targets, strength, ...opts }),
   merge: (tl: string, id: string, withIds: string[], opts: GenerateOptions) =>
     req<TLNode>('POST', node(tl, id, 'merge'), { with: withIds, ...opts }),
   branch: (tl: string, id: string, deviation: DeviationInput, autoContinue: boolean, options?: GenerateOptions) =>

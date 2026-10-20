@@ -171,7 +171,8 @@ export function cancelJobsForNodes(timelineId: string, nodeIds: Set<string>) {
     if (
       nodeIds.has(job.targetNodeId) ||
       (job.placeholderId && nodeIds.has(job.placeholderId)) ||
-      job.mergeWith?.some((id) => nodeIds.has(id))
+      job.mergeWith?.some((id) => nodeIds.has(id)) ||
+      (job.influenceFrom && nodeIds.has(job.influenceFrom))
     ) {
       job.status = 'cancelled';
       job.finishedAt = now();

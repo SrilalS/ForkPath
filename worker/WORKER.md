@@ -56,7 +56,20 @@ Rules for the loop:
 |---|---|---|
 | `CONTINUE` | `{ "children": [ ...1-4 nodes ], "branchReason": "..." }` | ✅ yes |
 | `MERGE` | Same shape as CONTINUE | ✅ yes |
+| `INFLUENCE` | Same shape as CONTINUE, plus `"influenceNote"` | ✅ yes, rarely |
 | `REGENERATE` | `{ "node": { ... } }` | ❌ no, exactly one node |
+
+**INFLUENCE** means the user picked an event in one stream and said it affects another stream. You write the
+next event in the **influenced** stream (after the node the brief names), and that event must visibly react
+to the influencing event:
+
+- The brief has both chains: "This stream so far" (where you write) and "The influencing stream".
+- Respect the strength the user set: `mild` nudges, `moderate` clearly shapes, `strong` largely drives.
+- Show the effect in the title or summary, and explain the mechanism in the narrative.
+- Start no earlier than both the node you continue from and the influencing event (`INVALID` otherwise).
+- Add `"influenceNote"`: one sentence on the effect, shown on the arrow. The server links the influencing
+  event to your node(s) itself; do not add that link in `influencedBy`.
+- When one event influences several streams, each stream is a separate INFLUENCE job.
 
 **MERGE** means the user kept two to five storylines apart (Branch A, B, C... for example separate regions)
 and now wants them to meet. All of them happened in the same world. Write the node(s) where they converge:
@@ -302,6 +315,22 @@ Guidance: "One branch on India's southern states, another on Sri Lanka rebuildin
       "influences": [ { "node": "@india", "strength": "mild", "note": "Southern ports offer Tamil Nadu an outside trading partner." } ]
     }
   ]
+}
+```
+
+### INFLUENCE
+
+```json
+{
+  "children": [
+    {
+      "title": "Madras Shuts Its Ports to Colombo",
+      "period": "1992-1994",
+      "summary": "...", "narrative": "...", "keyChanges": ["..."],
+      "significance": "notable", "tone": "conflict"
+    }
+  ],
+  "influenceNote": "The Vanni strike turns Tamil Nadu's sympathy for the refugees into an open trade boycott."
 }
 ```
 

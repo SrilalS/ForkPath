@@ -4,7 +4,7 @@ import { api, type GenerateOptions } from '../api.ts';
 import { GenerateOptionsFields } from './forms.tsx';
 import { isMajor, SIGNIFICANCE_LABEL, TONE_STYLE } from '../mood.ts';
 import { SIGNIFICANCES, TONES, type Significance, type Tone } from '../../../shared/types.ts';
-import { childrenOf, descendantIds, linkTargets, mergeTargets, parentIdsOf, threadColors, threadLabel, threadRootOf } from '../graph.ts';
+import { childrenOf, descendantIds, influenceTargets, mergeTargets, parentIdsOf, threadColors, threadLabel, threadRootOf } from '../graph.ts';
 
 export const PANEL_DEFAULT = 440;
 
@@ -58,7 +58,7 @@ export function NodePanel({
   );
   const descendants = useMemo(() => descendantIds(timeline, node.id).size, [timeline, node.id]);
   const canMerge = useMemo(() => mergeTargets(timeline, node.id).size > 0, [timeline, node.id]);
-  const canInfluence = useMemo(() => linkTargets(timeline, node.id).size > 0, [timeline, node.id]);
+  const canInfluence = useMemo(() => node.status === 'ready' && influenceTargets(timeline, node.id).size > 0, [timeline, node.id, node.status]);
   const isConvergence = !!node.mergeParents?.length;
   // Thread starts are parallel storylines, not continuations of this one.
   const primaryChildren = children.filter((c) => c.parentId === node.id && !c.threadName).length;
@@ -361,9 +361,13 @@ export function NodePanel({
             className="btn"
             disabled={busy || !canInfluence}
             onClick={() => onStartLink(node.id)}
-            title={canInfluence ? 'Pick a node in another thread that this event affects' : 'No node this event can influence'}
+            title={
+              canInfluence
+                ? 'Pick nodes in other streams; the model writes a new event after each, shaped by this one'
+                : 'No other stream in this world to influence'
+            }
           >
-            Influences...
+            Influence...
           </button>
           <button className="btn btn--ghost" disabled={busy} onClick={() => setMode('edit')}>
             Edit

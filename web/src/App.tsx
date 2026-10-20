@@ -17,15 +17,17 @@ import { NODE_H, NODE_W, toFlow, type FlowNode, type LayoutMode, type TimeAxis }
 import { CanvasActionsContext, TimelineNode, type CanvasActions } from './components/TimelineNode.tsx';
 import { InfluenceEdge } from './components/InfluenceEdge.tsx';
 import { NodePanel, PANEL_DEFAULT, PANEL_MIN, panelMax } from './components/NodePanel.tsx';
-import { DeviationDialog, LinkDialog, MergeDialog } from './components/forms.tsx';
+import { DeviationDialog, InfluenceDialog, MergeDialog } from './components/forms.tsx';
 import { isMajor, moodFor, SIGNIFICANCE_LABEL, TONE_STYLE, type Mood } from './mood.ts';
-import { canLink, linkTargets, mergeTargets } from './graph.ts';
+import { childrenOf, influenceBlocker, influenceTargets, mergeTargets, threadLabel, threadRootOf } from './graph.ts';
 
 const nodeTypes: NodeTypes = { timeline: TimelineNode };
 const edgeTypes: EdgeTypes = { influence: InfluenceEdge };
 const PANEL_WIDTH_KEY = 'althistory.panelWidth';
 /** Matches the server: one node plus up to this many others per merge. */
 const MAX_MERGE_WITH = 4;
+/** Matches the server: one event can influence up to this many streams at once. */
+const MAX_INFLUENCE_TARGETS = 4;
 const layoutKey = (timelineId: string) => `althistory.layout.${timelineId}`;
 
 /** Layout choice per timeline, remembered in this browser. Defaults to the compact tree. */
@@ -73,12 +75,12 @@ export default function App() {
     | { kind: 'new' }
     | { kind: 'branch'; nodeId: string }
     | { kind: 'merge'; a: string; others: string[] }
-    | { kind: 'link'; from: string; to: string }
+    | { kind: 'influence'; from: string; targets: string[] }
     | null
   >(null);
   const [toasts, setToasts] = useState<{ id: number; msg: string }[]>([]);
   const [layoutMode, setLayoutMode] = useLayoutMode(route.tl);
-  /** Node waiting for a second pick on the canvas: to converge with, or to influence. */
+  /** Node waiting for picks on the canvas: nodes to converge with, or nodes whose streams it influences. */
   const [pickSource, setPickSource] = useState<{ kind: 'merge' | 'link'; id: string; selected?: string[] } | null>(null);
   /** Set by a node's + button: open the side panel on that node with the Continue form showing. */
   const [continueRequest, setContinueRequest] = useState<{ id: string; at: number } | null>(null);
@@ -132,7 +134,7 @@ export default function App() {
     // Nodes deleted while picking drop out of the selection.
     const chosen = (pickSource.selected ?? []).filter((id) => timeline.nodes[id]);
     const targets =
-      pickSource.kind === 'merge' ? mergeTargets(timeline, pickSource.id, chosen) : linkTargets(timeline, pickSource.id);
+      pickSource.kind === 'merge' ? mergeTargets(timeline, pickSource.id, chosen) : influenceTargets(timeline, pickSource.id);
     return { kind: pickSource.kind, sourceId: pickSource.id, targets, selected: new Set(chosen) };
   }, [timeline, pickSource]);
   // Leaving the timeline (or the source vanishing) ends pick mode.
@@ -154,22 +156,18 @@ export default function App() {
         if (pick.kind === 'merge') {
           toast('Pick a node on a separate branch from all the selected ones. Nodes before or after them are on the same path.');
         } else {
-          const check = canLink(timeline, pick.sourceId, id);
-          toast(`Cannot link: ${check.ok ? 'not available' : check.reason}.`);
+          toast(`Cannot influence: ${influenceBlocker(timeline, pick.sourceId, id) ?? 'not available'}.`);
         }
         return;
       }
-      if (pick.kind === 'link') {
-        setDialog({ kind: 'link', from: pick.sourceId, to: id });
-        return;
-      }
-      // Merge: clicks toggle nodes in and out of the selection; the banner's Merge button confirms.
+      // Clicks toggle nodes in and out of the selection; the banner's button confirms.
       setPickSource((cur) => {
         if (!cur) return cur;
         const sel = cur.selected ?? [];
         if (sel.includes(id)) return { ...cur, selected: sel.filter((x) => x !== id) };
-        if (sel.length >= MAX_MERGE_WITH) {
-          toast(`Merge at most ${MAX_MERGE_WITH + 1} storylines at once.`);
+        const max = cur.kind === 'merge' ? MAX_MERGE_WITH : MAX_INFLUENCE_TARGETS;
+        if (sel.length >= max) {
+          toast(cur.kind === 'merge' ? `Merge at most ${max + 1} storylines at once.` : `Influence at most ${max} streams at once.`);
           return cur;
         }
         return { ...cur, selected: [...sel, id] };
@@ -257,9 +255,20 @@ export default function App() {
                 ) : (
                   <>
                     <span>
-                      ⇢ Pick the node that <strong>{timeline.nodes[pick.sourceId].title}</strong> influences
+                      ⇢ Pick where <strong>{timeline.nodes[pick.sourceId].title}</strong> affects other streams
                     </span>
-                    <span className="muted small">Highlighted nodes are in the same world</span>
+                    <span className="muted small">
+                      {pick.selected.size
+                        ? `${pick.selected.size} selected · click again to remove`
+                        : 'Click one or more highlighted nodes; a new event is written after each'}
+                    </span>
+                    <button
+                      className="btn btn--small btn--primary"
+                      disabled={!pick.selected.size}
+                      onClick={() => setDialog({ kind: 'influence', from: pick.sourceId, targets: [...pick.selected] })}
+                    >
+                      Influence {pick.selected.size || ''}
+                    </button>
                   </>
                 )}
                 <button className="btn btn--small" onClick={() => setPickSource(null)}>
@@ -337,14 +346,19 @@ export default function App() {
         />
       )}
 
-      {dialog?.kind === 'link' && timeline && timeline.nodes[dialog.from] && timeline.nodes[dialog.to] && (
-        <LinkDialog
+      {dialog?.kind === 'influence' && timeline && [dialog.from, ...dialog.targets].every((id) => timeline.nodes[id]) && (
+        <InfluenceDialog
           from={timeline.nodes[dialog.from]}
-          to={timeline.nodes[dialog.to]}
+          targets={dialog.targets.map((id) => ({
+            ...timeline.nodes[id],
+            stream: threadLabel(timeline, threadRootOf(timeline, id)),
+            existing: childrenOf(timeline, id).filter((c) => c.parentId === id && !c.threadName).length,
+          }))}
           onClose={() => setDialog(null)}
-          onSubmit={async (strength, note) => {
-            await api.addLink(timeline.id, dialog.from, dialog.to, strength, note);
+          onSubmit={async (strength, opts) => {
+            const created = await api.influence(timeline.id, dialog.from, dialog.targets, strength, opts);
             setPickSource(null);
+            if (created[0]) selectNode(created[0].id);
           }}
         />
       )}

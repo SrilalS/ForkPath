@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
-import { SCHEMA_VERSION, type Timeline, type TLNode } from '../../shared/types.ts';
+import { SCHEMA_VERSION, type Strength, type Timeline, type TLNode } from '../../shared/types.ts';
+import { WorldIndex } from '../../shared/world.ts';
 import { buildExport, exportFileName, importFile } from './transfer.ts';
 import { MigrationError } from './migrate.ts';
 import {
@@ -36,6 +37,7 @@ import {
   chronologyIssues,
   continueChronology,
   markStaleFrom,
+  putLink,
   removeLinksFor,
 } from './apply.ts';
 import {
@@ -43,6 +45,7 @@ import {
   deviationInput,
   formatIssues,
   generateOptions,
+  influenceInput,
   linkInput,
   nodeEdit,
   regenerateResult,
@@ -164,6 +167,52 @@ function startMerge(tl: Timeline, a: TLNode, others: TLNode[], opts: { timeSpan?
   return placeholder;
 }
 
+/** At most this many streams can be influenced by one event at once. */
+const MAX_INFLUENCE_TARGETS = 4;
+
+/**
+ * Queues one job per target: the agent writes a new event after each target that shows how `source`
+ * affects that stream. The influence link (source to the new node) is drawn right away, on the placeholder.
+ */
+function startInfluence(
+  tl: Timeline,
+  source: TLNode,
+  targets: TLNode[],
+  opts: { timeSpan?: string; guidance?: string; strength: Strength },
+) {
+  if (source.status !== 'ready') throw new HttpError(409, 'The influencing node is not ready yet');
+  if (new Set(targets.map((t) => t.id)).size !== targets.length) throw new HttpError(400, 'Pick each node once');
+  if (targets.length > MAX_INFLUENCE_TARGETS) throw new HttpError(400, `Influence at most ${MAX_INFLUENCE_TARGETS} streams at once`);
+  const ix = new WorldIndex(tl);
+  for (const t of targets) {
+    const check = ix.canInfluence(source.id, t.id);
+    if (!check.ok) throw new HttpError(400, `Cannot influence "${t.title}": ${check.reason}.`);
+  }
+  return targets.map((t) => {
+    const placeholder = makeNode({
+      parentId: t.id,
+      kind: 'event',
+      source: 'llm',
+      status: 'generating',
+      title: 'Generating...',
+      period: opts.timeSpan ?? '',
+    });
+    tl.nodes[placeholder.id] = placeholder;
+    putLink(tl, source.id, placeholder.id, opts.strength, '', 'user');
+    const job = enqueue({
+      type: 'influence',
+      timelineId: tl.id,
+      targetNodeId: t.id,
+      influenceFrom: source.id,
+      placeholderId: placeholder.id,
+      timeSpan: opts.timeSpan || undefined,
+      guidance: opts.guidance || undefined,
+    });
+    placeholder.jobId = job.id;
+    return placeholder;
+  });
+}
+
 // ---- timelines -------------------------------------------------------------
 
 app.get('/api/timelines', h(() => listTimelines()));
@@ -268,6 +317,20 @@ app.post(
     const node = startMerge(tl, a, others, parse(generateOptions, req.body));
     commit(tl);
     return node;
+  }),
+);
+
+app.post(
+  '/api/timelines/:id/nodes/:nodeId/influence',
+  h((req) => {
+    const tl = loadTimeline(req);
+    const source = loadNode(tl, req);
+    const body = parse(influenceInput, req.body);
+    const targets = body.targets.map((id) => tl.nodes[id]);
+    if (targets.some((n) => !n)) throw new HttpError(404, 'Influenced node not found');
+    const nodes = startInfluence(tl, source, targets, body);
+    commit(tl);
+    return nodes;
   }),
 );
 
@@ -380,6 +443,7 @@ app.post(
       targetNodeId: old.targetNodeId,
       placeholderId: old.placeholderId,
       mergeWith: old.mergeWith,
+      influenceFrom: old.influenceFrom,
       timeSpan: old.timeSpan,
       guidance: old.guidance,
     });
@@ -476,12 +540,13 @@ app.post(
       finishJob(job, 'cancelled');
       throw new HttpError(410, 'Timeline was deleted. Discard this job and move on.');
     }
-    if (job.type === 'continue' || job.type === 'merge') {
+    if (job.type !== 'regenerate') {
       const result = parse(continueResult, req.body);
       const placeholder = tl.nodes[job.placeholderId!];
       const parent = tl.nodes[job.targetNodeId];
       const mergeParents = job.type === 'merge' ? (job.mergeWith ?? []).filter((id) => tl.nodes[id]) : undefined;
-      if (!placeholder || !parent || (mergeParents && !mergeParents.length)) {
+      const sourceGone = job.type === 'influence' && !tl.nodes[job.influenceFrom ?? ''];
+      if (!placeholder || !parent || (mergeParents && !mergeParents.length) || sourceGone) {
         finishJob(job, 'cancelled');
         throw new HttpError(410, 'The node for this job was deleted. Discard it and move on.');
       }

@@ -30,14 +30,26 @@ export function addLink(
 ): { link: InfluenceLink } | { error: string } {
   const check = canLink(tl, from, to, ix);
   if (!check.ok) return { error: check.reason };
+  return { link: putLink(tl, from, to, strength, note, source) };
+}
+
+/**
+ * Adds or updates a link without the world rules. Only for the user's influence flow, which treats separate
+ * branches as streams of one world (like Merge) and was validated with canInfluence when it started.
+ */
+export function putLink(
+  tl: Timeline,
+  from: string,
+  to: string,
+  strength: Strength,
+  note: string,
+  source: InfluenceLink['source'],
+): InfluenceLink {
   const existing = tl.links.find((l) => l.from === from && l.to === to);
-  if (existing) {
-    Object.assign(existing, { strength, note, source });
-    return { link: existing };
-  }
+  if (existing) return Object.assign(existing, { strength, note, source });
   const link: InfluenceLink = { id: newId(), from, to, strength, note, source, createdAt: now() };
   tl.links.push(link);
-  return { link };
+  return link;
 }
 
 function applyLinkRefs(
@@ -138,6 +150,13 @@ export function applyContinue(tl: Timeline, job: Job, result: ContinueResult): A
   // Links last, so every new node exists and the world rules see the final graph.
   // Links never change parentage, so one index covers them all.
   const ix = new WorldIndex(tl);
+
+  // INFLUENCE: the source shapes every alternative written here (the placeholder's link carries the strength).
+  const from = job.type === 'influence' ? job.influenceFrom : undefined;
+  if (from && tl.nodes[from]) {
+    const strength = tl.links.find((l) => l.from === from && l.to === job.placeholderId)?.strength ?? 'moderate';
+    for (const c of report.created.filter((c) => !c.thread)) putLink(tl, from, c.id, strength, result.influenceNote ?? '', 'user');
+  }
   for (const [id, refs] of pendingLinks) applyLinkRefs(tl, id, refs, report, keys, ix);
   return report;
 }
@@ -184,7 +203,12 @@ export function chronologyIssues(
 
 /** Chronology check for a CONTINUE or MERGE result, including spawned threads (which follow their child). */
 export function continueChronology(tl: Timeline, job: Job, result: ContinueResult): string[] {
-  const parents = [job.targetNodeId, ...(job.type === 'merge' ? (job.mergeWith ?? []) : [])];
+  // An influenced event cannot start before the event that influences it.
+  const parents = [
+    job.targetNodeId,
+    ...(job.type === 'merge' ? (job.mergeWith ?? []) : []),
+    ...(job.type === 'influence' && job.influenceFrom ? [job.influenceFrom] : []),
+  ];
   const issues = chronologyIssues(tl, [...result.children, ...result.threads], parents);
   for (const c of result.children) {
     const y = startYear(c.period);
