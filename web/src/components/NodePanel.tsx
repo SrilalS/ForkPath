@@ -25,7 +25,7 @@ interface Props {
   onError: (msg: string) => void;
 }
 
-type Mode = 'view' | 'edit' | 'continue';
+type Mode = 'view' | 'edit' | 'continue' | 'regenerate';
 
 export const PANEL_MIN = 360;
 export const panelMax = () => Math.max(PANEL_MIN, Math.min(window.innerWidth * 0.8, 1200));
@@ -208,7 +208,7 @@ export function NodePanel({
                 </div>
                 <div className="banner__actions">
                   {node.kind === 'event' && (
-                    <button className="btn btn--small btn--primary" disabled={busy} onClick={() => run(() => api.regenerate(timeline.id, node.id))}>
+                    <button className="btn btn--small btn--primary" disabled={busy} onClick={() => setMode('regenerate')}>
                       Regenerate
                     </button>
                   )}
@@ -317,6 +317,18 @@ export function NodePanel({
         )}
       </div>
 
+      {mode === 'regenerate' && (
+        <RegenerateForm
+          busy={busy}
+          stale={node.stale}
+          onCancel={() => setMode('view')}
+          onSubmit={async (guidance) => {
+            const ok = await run(() => api.regenerate(timeline.id, node.id, { guidance }));
+            if (ok) setMode('view');
+          }}
+        />
+      )}
+
       {mode === 'continue' && (
         <ContinueForm
           busy={busy}
@@ -357,7 +369,7 @@ export function NodePanel({
             Edit
           </button>
           {node.kind === 'event' && (
-            <button className="btn btn--ghost" disabled={busy} onClick={() => run(() => api.regenerate(timeline.id, node.id))} title="Rewrite this node">
+            <button className="btn btn--ghost" disabled={busy} onClick={() => setMode('regenerate')} title="Rewrite this node">
               Regenerate
             </button>
           )}
@@ -384,6 +396,60 @@ export function NodePanel({
         </div>
       )}
     </aside>
+  );
+}
+
+function RegenerateForm({
+  busy,
+  stale,
+  onCancel,
+  onSubmit,
+}: {
+  busy: boolean;
+  stale: boolean;
+  onCancel: () => void;
+  onSubmit: (guidance: string) => void;
+}) {
+  const [guidance, setGuidance] = useState('');
+  return (
+    <form
+      className="panel__continue form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(guidance.trim());
+      }}
+    >
+      <h3>Regenerate this node</h3>
+      <p className="muted small">
+        {stale
+          ? 'The model rewrites it to follow from the changed history before it.'
+          : 'The model rewrites it from scratch, keeping roughly the same period.'}{' '}
+        Nodes after it will be marked stale.
+      </p>
+      <label className="field">
+        <span className="field__label">
+          Guidance <em>optional</em>
+        </span>
+        <textarea
+          autoFocus
+          rows={3}
+          placeholder="e.g. make the coup fail, put more weight on the economy, keep Nehru alive"
+          value={guidance}
+          onChange={(e) => setGuidance(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(guidance.trim());
+          }}
+        />
+      </label>
+      <div className="form__actions">
+        <button type="button" className="btn btn--ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn--primary" disabled={busy}>
+          Regenerate
+        </button>
+      </div>
+    </form>
   );
 }
 
