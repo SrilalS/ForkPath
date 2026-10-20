@@ -160,6 +160,10 @@ export function toFlow(tl: Timeline, mode: LayoutMode = 'structure'): { nodes: F
       // counts as measured, so edges vanish until a reload. With `handles`, edges are computed from data.
       initialWidth: NODE_W,
       initialHeight: NODE_H,
+      // React Flow copies `measured` from these objects whenever they are replaced (every update), and its
+      // DOM measurement does not fire again for a card whose size did not change. Without this, the size is
+      // lost after the first update and fitView (which only fits measured nodes) silently does nothing.
+      measured: { width: NODE_W, height: NODE_H },
       handles: HANDLES,
       data: { node: n, isRoot: n.id === tl.rootId, childCount: childCount.get(n.id) ?? 0, thread: threadOf(n) },
       draggable: false,
